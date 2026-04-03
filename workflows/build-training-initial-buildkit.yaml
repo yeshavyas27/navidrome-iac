@@ -70,7 +70,7 @@ spec:
         - --single-branch
         - --branch
         - "{{inputs.parameters.branch}}"
-        - https://github.com/teaching-on-testbeds/gourmetgram-train.git
+        - https://github.com/teaching-on-testbeds/navidrome-train.git
         - .
       volumeMounts:
       - name: workdir
@@ -99,11 +99,11 @@ spec:
         - --local
         - dockerfile=/mnt/workspace
         - --output
-        - type=image,name=registry.kube-system.svc.cluster.local:5000/gourmetgram-train:latest,push=true,registry.insecure=true
+        - type=image,name=registry.kube-system.svc.cluster.local:5000/navidrome-train:latest,push=true,registry.insecure=true
         - --export-cache
-        - type=registry,ref=registry.kube-system.svc.cluster.local:5000/gourmetgram-train:buildcache,mode=max,registry.insecure=true
+        - type=registry,ref=registry.kube-system.svc.cluster.local:5000/navidrome-train:buildcache,mode=max,registry.insecure=true
         - --import-cache
-        - type=registry,ref=registry.kube-system.svc.cluster.local:5000/gourmetgram-train:buildcache,registry.insecure=true
+        - type=registry,ref=registry.kube-system.svc.cluster.local:5000/navidrome-train:buildcache,registry.insecure=true
       resources:
         requests:
           memory: "2Gi"

@@ -1,19 +1,19 @@
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: HTTPRoute
 metadata:
-  name: gourmetgram-route
-  namespace: gourmetgram-platform
+  name: navidrome-route
+  namespace: navidrome-platform
 spec:
   parentRefs:
-  - name: gourmetgram-gateway
+  - name: navidrome-gateway
   rules:
   - backendRefs:
-    - name: gourmetgram-app
-      namespace: gourmetgram-production
+    - name: navidrome-app
+      namespace: navidrome-production
       port: 8080
       weight: 90
-    - name: gourmetgram-app
-      namespace: gourmetgram-canary
+    - name: navidrome-app
+      namespace: navidrome-canary
       port: 8081
       weight: 10
 

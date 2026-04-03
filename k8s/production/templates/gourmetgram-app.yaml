@@ -2,20 +2,20 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: gourmetgram-app
-  namespace: gourmetgram-production
+  name: navidrome-app
+  namespace: navidrome-production
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      app: gourmetgram-app
+      app: navidrome-app
   template:
     metadata:
       labels:
-        app: gourmetgram-app
+        app: navidrome-app
     spec:
       containers:
-        - name: gourmetgram-app
+        - name: navidrome-app
           image: {{ .Values.image.repository }}:{{ .Values.image.tag }}
           ports:
             - containerPort: 8000
@@ -26,28 +26,28 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: gourmetgram-app
-  namespace: gourmetgram-production
+  name: navidrome-app
+  namespace: navidrome-production
 spec:
   selector:
-    app: gourmetgram-app
+    app: navidrome-app
   ports:
     - port: {{ .Values.service.port }}
       targetPort: 8000
   externalIPs:
     - {{ .Values.service.externalIP }}
 ---
-# ReferenceGrant allows HTTPRoute in gourmetgram-platform to reference this Service
+# ReferenceGrant allows HTTPRoute in navidrome-platform to reference this Service
 apiVersion: gateway.networking.k8s.io/v1beta1
 kind: ReferenceGrant
 metadata:
   name: allow-platform-httproute
-  namespace: gourmetgram-production
+  namespace: navidrome-production
 spec:
   from:
   - group: gateway.networking.k8s.io
     kind: HTTPRoute
-    namespace: gourmetgram-platform
+    namespace: navidrome-platform
   to:
   - group: ""
     kind: Service

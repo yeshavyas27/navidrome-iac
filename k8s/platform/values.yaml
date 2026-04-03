@@ -1,3 +1,6 @@
+navidrome:
+  externalIP: "0.0.0.0"
+
 minio:
   externalIP: "0.0.0.0"
 

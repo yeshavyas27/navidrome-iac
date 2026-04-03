@@ -3,10 +3,10 @@ kind: CronWorkflow
 metadata:
   name: cron-train
 spec:
-  # Cron schedule: Run daily at 2:00 AM UTC
+  # Cron schedule: Run weekly on Sunday at 2:00 AM UTC
   # Format: minute hour day-of-month month day-of-week
-  # 0 2 * * * = At 02:00 (2am) every day
-  schedule: "0 2 * * *"
+  # 0 2 * * 0 = At 02:00 (2am) every Sunday
+  schedule: "0 2 * * 0"
 
   # Time zone for schedule (defaults to UTC if not specified)
   timezone: "UTC"
