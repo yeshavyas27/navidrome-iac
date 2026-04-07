@@ -1,0 +1,29 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=0.6in]{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+
+\begin{document}
+
+\section*{Infrastructure Requirements --- ECE-GY 9183, Team proj05}
+
+All services run on a single-node Kubernetes v1.30 cluster (KVM@TACC, m1.large: 4 vCPU / 8GB RAM / 40GB disk).
+Observed values measured via \texttt{kubectl top pods -n navidrome-platform} at idle.
+MLflow memory request set to 1Gi based on observed idle usage of 1355Mi; limit set to 2Gi to allow headroom under load.
+
+\vspace{0.8em}
+\footnotesize
+\setlength{\tabcolsep}{5pt}
+
+\begin{tabular}{@{} l l l l l l l l @{}}
+\toprule
+\textbf{Service} & \textbf{GPU} & \textbf{CPU req} & \textbf{CPU limit} & \textbf{Mem req} & \textbf{Mem limit} & \textbf{Obs. CPU} & \textbf{Obs. Mem} \\
+\midrule
+navidrome  & none & 100m  & 500m  & 256Mi & 512Mi & 1m  & 10Mi   \\
+mlflow     & none & 200m  & 1000m & 1Gi   & 2Gi   & 13m & 1355Mi \\
+postgresql & none & 100m  & 500m  & 256Mi & 1Gi   & 1m  & 33Mi   \\
+minio      & none & 100m  & 500m  & 256Mi & 1Gi   & 1m  & 116Mi  \\
+\bottomrule
+\end{tabular}
+
+\end{document}
