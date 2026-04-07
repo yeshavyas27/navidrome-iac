@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars and fill in your values
+# Get security group IDs from: openstack security group list
+
+reservation_id  = "<BLAZAR_RESERVATION_ID>"
+sg_default_id   = "<DEFAULT_SG_ID>"
+sg_ssh_id       = "<ALLOW_SSH_SG_ID>"
+sg_navidrome_id = "<NAVIDROME_SG_ID>"

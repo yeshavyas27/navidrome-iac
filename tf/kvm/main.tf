@@ -29,9 +29,9 @@ resource "openstack_networking_port_v2" "public_net_ports" {
   network_id = data.openstack_networking_network_v2.public_net.id
 
   security_group_ids = [
-    "833aa0fa-62f6-4eac-8ddf-510bb3441da3", # default
-    "3c28aa5b-1e89-4037-978c-c4bbdcc90782", # allow-ssh-proj05
-    "d8f27991-e45c-4a62-a72f-69edaa1076de", # navidrome-sg-proj05
+    var.sg_default_id,
+    var.sg_ssh_id,
+    var.sg_navidrome_id,
   ]
 }
 
@@ -61,7 +61,7 @@ resource "openstack_compute_instance_v2" "nodes" {
 
 # Open required ports on navidrome-sg-proj05 (existing shared security group)
 locals {
-  navidrome_sg_id = "d8f27991-e45c-4a62-a72f-69edaa1076de"
+  navidrome_sg_id = var.sg_navidrome_id
   service_ports   = [4533, 8000, 9000, 9001]
 }
 

@@ -53,39 +53,24 @@
       <mxGeometry x="890" y="250" width="310" height="80" as="geometry" />
     </mxCell>
 
-    <!-- ns: argo -->
-    <mxCell id="12" value="ns: argo" style="swimlane;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;fontSize=10;" vertex="1" parent="1">
-      <mxGeometry x="870" y="400" width="360" height="180" as="geometry" />
-    </mxCell>
-
-    <!-- Argo Workflows -->
-    <mxCell id="13" value="Argo Workflows&#xa;CronWorkflow: 0 2 * * 0 (weekly)&#xa;triggers training pipeline" style="rounded=1;whiteSpace=wrap;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" vertex="1" parent="1">
-      <mxGeometry x="890" y="450" width="310" height="100" as="geometry" />
-    </mxCell>
-
     <!-- kube-system -->
     <mxCell id="14" value="ns: kube-system" style="swimlane;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=10;" vertex="1" parent="1">
-      <mxGeometry x="870" y="620" width="360" height="190" as="geometry" />
+      <mxGeometry x="870" y="400" width="360" height="190" as="geometry" />
     </mxCell>
 
     <!-- Registry -->
-    <mxCell id="15" value="In-cluster Registry :5000&#xa;navidrome-custom&#xa;navidrome-train, navidrome-serve" style="rounded=1;whiteSpace=wrap;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-      <mxGeometry x="890" y="660" width="310" height="70" as="geometry" />
+    <mxCell id="15" value="In-cluster Registry :5000" style="rounded=1;whiteSpace=wrap;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="890" y="440" width="310" height="50" as="geometry" />
     </mxCell>
 
     <!-- metrics-server + local-path -->
     <mxCell id="16" value="metrics-server&#xa;local-path-provisioner&#xa;K8s Dashboard" style="rounded=1;whiteSpace=wrap;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" vertex="1" parent="1">
-      <mxGeometry x="890" y="750" width="310" height="40" as="geometry" />
+      <mxGeometry x="890" y="510" width="310" height="60" as="geometry" />
     </mxCell>
 
     <!-- GitHub -->
-    <mxCell id="17" value="GitHub&#xa;navidrome-iac (IaC)&#xa;navidrome-train&#xa;navidrome-serve" style="rounded=1;whiteSpace=wrap;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=10;" vertex="1" parent="1">
-      <mxGeometry x="130" y="860" width="200" height="100" as="geometry" />
-    </mxCell>
-
-    <!-- CHI@UC Swift -->
-    <mxCell id="32" value="CHI@UC Swift&#xa;navidrome-bucket-proj05&#xa;training datasets (music files)" style="shape=mxgraph.cisco.storage.storage_server;whiteSpace=wrap;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;fontSize=10;verticalLabelPosition=bottom;verticalAlign=top;" vertex="1" parent="1">
-      <mxGeometry x="380" y="860" width="160" height="100" as="geometry" />
+    <mxCell id="17" value="GitHub&#xa;navidrome-iac (IaC)" style="rounded=1;whiteSpace=wrap;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+      <mxGeometry x="130" y="860" width="200" height="80" as="geometry" />
     </mxCell>
 
     <!-- User -->
@@ -94,7 +79,7 @@
     </mxCell>
 
     <!-- Floating IP -->
-    <mxCell id="19" value="Floating IP&#xa;129.114.27.204&#xa;:4533 :8000 :9001" style="ellipse;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;fontSize=10;" vertex="1" parent="1">
+    <mxCell id="19" value="Floating IP&#xa;(see terraform output)&#xa;:4533 :8000 :9001" style="ellipse;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;fontSize=10;" vertex="1" parent="1">
       <mxGeometry x="1050" y="870" width="180" height="80" as="geometry" />
     </mxCell>
 
@@ -125,21 +110,6 @@
       <mxGeometry relative="1" as="geometry" />
     </mxCell>
 
-    <!-- Argo Workflows → MLflow -->
-    <mxCell id="25" value="logs runs" style="edgeStyle=orthogonalEdgeStyle;fontSize=9;" edge="1" source="13" target="7" parent="1">
-      <mxGeometry relative="1" as="geometry" />
-    </mxCell>
-
-    <!-- Argo Workflows → MinIO -->
-    <mxCell id="26" value="reads datasets" style="edgeStyle=orthogonalEdgeStyle;fontSize=9;" edge="1" source="13" target="9" parent="1">
-      <mxGeometry relative="1" as="geometry" />
-    </mxCell>
-
-    <!-- Argo Workflows → Registry -->
-    <mxCell id="27" value="pushes image" style="edgeStyle=orthogonalEdgeStyle;fontSize=9;" edge="1" source="13" target="15" parent="1">
-      <mxGeometry relative="1" as="geometry" />
-    </mxCell>
-
     <!-- User → Floating IP -->
     <mxCell id="28" value="" style="edgeStyle=orthogonalEdgeStyle;fontSize=9;" edge="1" source="18" target="19" parent="1">
       <mxGeometry relative="1" as="geometry" />
@@ -157,11 +127,6 @@
 
     <!-- Floating IP → MinIO -->
     <mxCell id="31" value=":9001" style="edgeStyle=orthogonalEdgeStyle;fontSize=9;" edge="1" source="19" target="9" parent="1">
-      <mxGeometry relative="1" as="geometry" />
-    </mxCell>
-
-    <!-- Argo Workflows → CHI@UC Swift -->
-    <mxCell id="33" value="reads datasets" style="edgeStyle=orthogonalEdgeStyle;dashed=1;fontSize=9;" edge="1" source="13" target="32" parent="1">
       <mxGeometry relative="1" as="geometry" />
     </mxCell>
 

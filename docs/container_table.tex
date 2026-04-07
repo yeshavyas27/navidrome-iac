@@ -1,0 +1,72 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=0.6in]{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage{longtable}
+
+\hypersetup{colorlinks=true, urlcolor=blue, linkcolor=blue}
+
+\begin{document}
+
+\section*{Container Inventory --- ECE-GY 9183, Team proj05}
+
+\footnotesize
+\setlength{\tabcolsep}{5pt}
+
+\begin{longtable}{@{} p{1.5cm} p{2.6cm} p{4.8cm} p{4.4cm} @{}}
+\toprule
+\textbf{Role} & \textbf{Container} & \textbf{Image / Dockerfile} & \textbf{K8s Manifest} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Role} & \textbf{Container} & \textbf{Image / Dockerfile} & \textbf{K8s Manifest} \\
+\midrule
+\endhead
+\bottomrule
+\endlastfoot
+
+DevOps &
+navidrome &
+\texttt{deluan/navidrome:latest} \newline
+\href{https://hub.docker.com/r/deluan/navidrome}{upstream (Docker Hub)} &
+\href{https://github.com/salawhaaat/navidrome-iac/blob/main/k8s/platform/templates/navidrome.yaml}{navidrome.yaml} \\[8pt]
+
+DevOps &
+mlflow &
+\texttt{ghcr.io/mlflow/mlflow:v3.9.0} \newline
+\href{https://github.com/mlflow/mlflow}{upstream (GitHub)} &
+\href{https://github.com/salawhaaat/navidrome-iac/blob/main/k8s/platform/templates/postgres.yaml}{postgres.yaml} \\[8pt]
+
+DevOps &
+postgresql &
+\texttt{postgres:18} \newline
+\href{https://hub.docker.com/_/postgres}{upstream (Docker Hub)} &
+\href{https://github.com/salawhaaat/navidrome-iac/blob/main/k8s/platform/templates/postgres.yaml}{postgres.yaml} \\[8pt]
+
+DevOps &
+minio &
+\texttt{minio/minio:latest} \newline
+\href{https://hub.docker.com/r/minio/minio}{upstream (Docker Hub)} &
+\href{https://github.com/salawhaaat/navidrome-iac/blob/main/k8s/platform/templates/minio.yaml}{minio.yaml} \\[8pt]
+
+Training &
+navidrome-train &
+built in-cluster (BuildKit) \newline
+\href{https://github.com/yeshavyas27/navidrome_mlops/blob/master/train/Dockerfile}{navidrome\_mlops/train/Dockerfile} &
+\href{https://github.com/salawhaaat/navidrome-iac/blob/main/workflows/build-navidrome-custom.yaml}{build-navidrome-custom.yaml} \\[8pt]
+
+Serving &
+navidrome-serve &
+built in-cluster (BuildKit) \newline
+\href{https://github.com/yeshavyas27/navidrome_mlops/blob/master/serve/Dockerfile}{navidrome\_mlops/serve/Dockerfile} &
+TBD \\[8pt]
+
+Data &
+--- &
+TBD &
+TBD \\
+
+\end{longtable}
+
+\end{document}

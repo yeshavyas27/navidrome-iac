@@ -20,9 +20,9 @@
 - [x] PVCs — persistent storage via local-path-provisioner
 - [x] Secrets — postgres-credentials, minio-credentials (not in Git)
 - [x] All services reachable via floating IP:
-  - Navidrome:     http://129.114.27.204:4533
-  - MLflow:        http://129.114.27.204:8000
-  - MinIO console: http://129.114.27.204:9001
+  - Navidrome:     http://<FLOATING_IP>:4533
+  - MLflow:        http://<FLOATING_IP>:8000
+  - MinIO console: http://<FLOATING_IP>:9001
 
 ## Phase 3: K8s Extensions Installed (via kubespray group_vars)
 
