@@ -107,26 +107,10 @@ resource "openstack_compute_instance_v2" "gpu_nodes" {
   EOF
 }
 
-# Open required ports on navidrome-sg-proj05 (existing shared security group)
-locals {
-  navidrome_sg_id = var.sg_navidrome_id
-  service_ports   = [4533, 8000, 9000, 9001, 3000, 9090, 9093]  # Added Grafana (3000), Prometheus (9090), Alertmanager (9093)
-}
-
-resource "openstack_networking_secgroup_rule_v2" "navidrome_ports" {
-  for_each          = toset([for p in local.service_ports : tostring(p)])
-  direction         = "ingress"
-  ethertype         = "IPv4"
-  protocol          = "tcp"
-  port_range_min    = tonumber(each.value)
-  port_range_max    = tonumber(each.value)
-  remote_ip_prefix  = "0.0.0.0/0"
-  security_group_id = local.navidrome_sg_id
-
-  lifecycle {
-    ignore_changes = all  # rules may already exist from manual setup
-  }
-}
+# Security group rules for navidrome-sg-proj05 are managed manually in Chameleon UI.
+# Required ports: 4533 (Navidrome), 8000 (MLflow), 9000/9001 (MinIO),
+#                 3000 (Grafana), 9090 (Prometheus), 9093 (Alertmanager)
+# Add any missing rules via: Network → Security Groups → navidrome-sg-proj05 → Manage Rules
 
 resource "openstack_networking_floatingip_v2" "floating_ip" {
   pool        = "public"
