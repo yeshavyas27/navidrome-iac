@@ -1,0 +1,249 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-config
+  namespace: navidrome-platform
+  labels:
+    app: redis
+data:
+  redis.conf: |
+    # Redis configuration for session caching and embeddings
+    port 6379
+    bind 0.0.0.0
+    
+    # Memory management
+    maxmemory 1gb
+    maxmemory-policy allkeys-lru
+    
+    # Persistence (RDB snapshots)
+    save 900 1      # Save if 1+ changes in 15 min
+    save 300 10     # Save if 10+ changes in 5 min
+    save 60 10000   # Save if 10000+ changes in 60 sec
+    
+    # Append-only file (AOF) - optional, adds durability
+    appendonly no   # Can enable to: appendonly yes
+    appendfsync everysec
+    
+    # Key expiration
+    lazyfree-lazy-eviction yes
+    lazyfree-lazy-expire yes
+    
+    # Logging
+    loglevel notice
+    
+    # Client connections
+    timeout 0
+    tcp-keepalive 300
+    tcp-backlog 511
+    
+    # Database count
+    databases 16
+    
+    # Security (optional - can set requirepass here)
+    # requirepass yourpassword
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: redis-credentials
+  namespace: navidrome-platform
+  labels:
+    app: redis
+type: Opaque
+stringData:
+  # Optional: set password for Redis authentication
+  password: ""  # Leave empty for no auth; set to strong password in production
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: navidrome-platform
+  labels:
+    app: redis
+spec:
+  type: ClusterIP
+  ports:
+    - port: 6379
+      targetPort: 6379
+      protocol: TCP
+      name: redis
+  selector:
+    app: redis
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  namespace: navidrome-platform
+  labels:
+    app: redis
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: navidrome-platform
+  labels:
+    app: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "6379"
+    spec:
+      containers:
+        - name: redis
+          image: redis:7.2-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 6379
+              name: redis
+              protocol: TCP
+          
+          # Mount config
+          volumeMounts:
+            - name: config
+              mountPath: /usr/local/etc/redis
+            - name: data
+              mountPath: /data
+          
+          # Redis command with custom config
+          command:
+            - redis-server
+            - /usr/local/etc/redis/redis.conf
+            - --dir
+            - /data
+            - --dbfilename
+            - dump.rdb
+          
+          # Resource limits
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          
+          # Health checks
+          livenessProbe:
+            tcpSocket:
+              port: 6379
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          readinessProbe:
+            exec:
+              command:
+                - redis-cli
+                - ping
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          
+          # Graceful shutdown
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - redis-cli
+                  - shutdown
+      
+      # Pod scheduling
+      terminationGracePeriodSeconds: 30
+      
+      volumes:
+        - name: config
+          configMap:
+            name: redis-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: redis-data
+---
+# Optional: Redis Exporter for Prometheus metrics
+# Uncomment to enable Redis metrics in Prometheus
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-exporter
+  namespace: navidrome-platform
+  labels:
+    app: redis-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis-exporter
+  template:
+    metadata:
+      labels:
+        app: redis-exporter
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9121"
+    spec:
+      containers:
+        - name: redis-exporter
+          image: oliver006/redis_exporter:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9121
+              name: metrics
+          
+          # Connect to Redis
+          env:
+            - name: REDIS_ADDR
+              value: "redis:6379"
+          
+          # Resource limits
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          
+          # Health check
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: 9121
+            initialDelaySeconds: 30
+            periodSeconds: 10
+---
+# ServiceMonitor for Prometheus (if using Prometheus Operator)
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-exporter
+  namespace: navidrome-platform
+  labels:
+    app: redis-exporter
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9121
+      targetPort: 9121
+      protocol: TCP
+      name: metrics
+  selector:
+    app: redis-exporter
