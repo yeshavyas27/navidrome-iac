@@ -11,16 +11,6 @@ all:
       ansible_user: cc
       ip: 192.168.1.11
       access_ip: 192.168.1.11
-    node2:
-      ansible_host: 192.168.1.12
-      ansible_user: cc
-      ip: 192.168.1.12
-      access_ip: 192.168.1.12
-    # node3 (GPU):
-    #   ansible_host: 192.168.1.13
-    #   ansible_user: cc
-    #   ip: 192.168.1.13
-    #   access_ip: 192.168.1.13
   children:
     kube_control_plane:
       hosts:
@@ -28,8 +18,6 @@ all:
     kube_node:
       hosts:
         node1:
-        node2:
-        # node3:
     etcd:
       hosts:
         node1:
