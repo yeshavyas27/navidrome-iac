@@ -2,6 +2,7 @@
 \usepackage[margin=0.6in]{geometry}
 \usepackage{booktabs}
 \usepackage{array}
+\usepackage{graphicx}
 
 \begin{document}
 
@@ -25,5 +26,12 @@ postgresql & none & 100m  & 500m  & 256Mi & 1Gi   & 1m  & 33Mi   \\
 minio      & none & 100m  & 500m  & 256Mi & 1Gi   & 1m  & 116Mi  \\
 \bottomrule
 \end{tabular}
+
+\vspace{1.5em}
+\normalsize
+\textbf{Evidence from Chameleon (kubectl top pods):}
+
+\vspace{0.5em}
+\includegraphics[width=\textwidth]{resources.png}
 
 \end{document}

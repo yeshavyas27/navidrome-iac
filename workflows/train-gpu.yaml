@@ -1,0 +1,180 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: train-model-gpu
+  namespace: argo
+  labels:
+    team: navidrome
+spec:
+  entrypoint: train-gpu-pipeline
+  arguments:
+    parameters:
+      - name: use_gpu
+        value: "true"
+      - name: gpu_count
+        value: "1"
+      - name: batch_size
+        value: "128"
+  
+  templates:
+    - name: train-gpu-pipeline
+      dag:
+        tasks:
+          - name: train-gpu-task
+            template: train-with-gpu
+            arguments:
+              parameters:
+                - name: batch_size
+                  value: "{{workflow.parameters.batch_size}}"
+          
+          - name: evaluate-model
+            template: evaluate
+            depends: "train-gpu-task"
+            arguments:
+              parameters:
+                - name: model_id
+                  value: "{{tasks.train-gpu-task.outputs.parameters.model_id}}"
+          
+          - name: register-model
+            template: register
+            depends: "evaluate-model"
+            when: "{{tasks.evaluate-model.outputs.parameters.passes_quality_gate}} == 'true'"
+            arguments:
+              parameters:
+                - name: model_id
+                  value: "{{tasks.train-gpu-task.outputs.parameters.model_id}}"
+    
+    # Training with GPU
+    - name: train-with-gpu
+      inputs:
+        parameters:
+          - name: batch_size
+      outputs:
+        parameters:
+          - name: model_id
+            valueFrom:
+              path: /model/model_id.txt
+      nodeSelector:
+        gpu: "true"  # Schedule only on GPU nodes
+      container:
+        image: navidrome-train:gpu-enabled
+        imagePullPolicy: IfNotPresent
+        command:
+          - python
+          - /app/train_gpu.py
+        args:
+          - "--batch_size={{inputs.parameters.batch_size}}"
+          - "--use_gpu=true"
+          - "--num_gpus=1"
+        env:
+          - name: CUDA_VISIBLE_DEVICES
+            value: "0"
+          - name: MLFLOW_TRACKING_URI
+            value: "http://mlflow.navidrome-platform.svc.cluster.local:5000"
+          - name: MLFLOW_BACKEND_STORE_URI
+            value: "postgresql://postgres.navidrome-platform.svc.cluster.local/mlflow"
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: minio-credentials
+                key: accesskey
+          - name: AWS_SECRET_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: minio-credentials
+                key: secretkey
+          - name: S3_ENDPOINT_URL
+            value: "http://minio.navidrome-platform.svc.cluster.local:9000"
+        resources:
+          requests:
+            cpu: 4
+            memory: 16Gi
+            nvidia.com/gpu: 1  # Request 1 GPU
+          limits:
+            cpu: 8
+            memory: 32Gi
+            nvidia.com/gpu: 1
+        volumeMounts:
+          - name: model-output
+            mountPath: /model
+          - name: training-data
+            mountPath: /data
+      volumes:
+        - name: model-output
+          emptyDir: {}
+        - name: training-data
+          persistentVolumeClaim:
+            claimName: training-data-pvc
+    
+    # Model evaluation
+    - name: evaluate
+      inputs:
+        parameters:
+          - name: model_id
+      outputs:
+        parameters:
+          - name: passes_quality_gate
+            valueFrom:
+              path: /eval/passes_quality.txt
+      container:
+        image: navidrome-train:gpu-enabled
+        imagePullPolicy: IfNotPresent
+        command:
+          - python
+          - /app/evaluate.py
+        args:
+          - "--model_id={{inputs.parameters.model_id}}"
+          - "--threshold=0.75"
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: "http://mlflow.navidrome-platform.svc.cluster.local:5000"
+          - name: AWS_ACCESS_KEY_ID
+            valueFrom:
+              secretKeyRef:
+                name: minio-credentials
+                key: accesskey
+          - name: AWS_SECRET_ACCESS_KEY
+            valueFrom:
+              secretKeyRef:
+                name: minio-credentials
+                key: secretkey
+          - name: S3_ENDPOINT_URL
+            value: "http://minio.navidrome-platform.svc.cluster.local:9000"
+        resources:
+          requests:
+            cpu: 2
+            memory: 8Gi
+          limits:
+            cpu: 4
+            memory: 16Gi
+        volumeMounts:
+          - name: eval-output
+            mountPath: /eval
+      volumes:
+        - name: eval-output
+          emptyDir: {}
+    
+    # Model registration in MLflow
+    - name: register
+      inputs:
+        parameters:
+          - name: model_id
+      container:
+        image: navidrome-train:gpu-enabled
+        imagePullPolicy: IfNotPresent
+        command:
+          - python
+          - /app/register_model.py
+        args:
+          - "--model_id={{inputs.parameters.model_id}}"
+          - "--stage=Staging"
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: "http://mlflow.navidrome-platform.svc.cluster.local:5000"
+        resources:
+          requests:
+            cpu: 500m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 1Gi

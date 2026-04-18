@@ -1,0 +1,150 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: {{ .Values.namespace }}
+data:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+    
+    route:
+      receiver: 'default'
+      group_by: ['alertname', 'cluster', 'service']
+      group_wait: 10s
+      group_interval: 10s
+      repeat_interval: 12h
+      routes:
+        # Critical alerts get escalated immediately
+        - match:
+            severity: critical
+          receiver: 'critical'
+          group_wait: 0s
+          repeat_interval: 5m
+        
+        # Warning alerts are grouped
+        - match:
+            severity: warning
+          receiver: 'warnings'
+          group_wait: 30s
+          repeat_interval: 2h
+    
+    receivers:
+      - name: 'default'
+        # Add notification receivers here (email, slack, etc.)
+        # Example for console output (for testing):
+        webhook_configs:
+          - url: 'http://localhost:5001/'
+      
+      - name: 'critical'
+        # Critical alerts notification config
+        webhook_configs:
+          - url: 'http://localhost:5001/'
+      
+      - name: 'warnings'
+        # Warning alerts notification config
+        webhook_configs:
+          - url: 'http://localhost:5001/'
+    
+    inhibit_rules:
+      # Don't fire warning alert if critical is firing
+      - source_match:
+          severity: 'critical'
+        target_match:
+          severity: 'warning'
+        equal: ['alertname', 'cluster']
+      
+      # Suppress NodeNotReady alerts if KubeNodeNotReady is firing
+      - source_match:
+          alertname: 'KubeNodeNotReady'
+        target_match:
+          alertname: 'NodeNotReady'
+        equal: ['node']
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: alertmanager
+spec:
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.alertmanager.port }}
+      targetPort: {{ .Values.alertmanager.port }}
+      protocol: TCP
+      name: http
+  selector:
+    app: alertmanager
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: alertmanager-storage
+  namespace: {{ .Values.namespace }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: {{ .Values.alertmanager.storage.storageClass }}
+  resources:
+    requests:
+      storage: {{ .Values.alertmanager.storage.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: {{ .Values.namespace }}
+  labels:
+    app: alertmanager
+spec:
+  replicas: {{ .Values.alertmanager.replicas }}
+  selector:
+    matchLabels:
+      app: alertmanager
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+    spec:
+      containers:
+        - name: alertmanager
+          image: {{ .Values.alertmanager.image }}
+          ports:
+            - containerPort: {{ .Values.alertmanager.port }}
+              name: http
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alertmanager
+            - name: storage
+              mountPath: /alertmanager
+          args:
+            - '--config.file=/etc/alertmanager/alertmanager.yml'
+            - '--storage.path=/alertmanager'
+          resources:
+            requests:
+              cpu: {{ .Values.alertmanager.resources.requests.cpu }}
+              memory: {{ .Values.alertmanager.resources.requests.memory }}
+            limits:
+              cpu: {{ .Values.alertmanager.resources.limits.cpu }}
+              memory: {{ .Values.alertmanager.resources.limits.memory }}
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: {{ .Values.alertmanager.port }}
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: {{ .Values.alertmanager.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: alertmanager-config
+        - name: storage
+          persistentVolumeClaim:
+            claimName: alertmanager-storage

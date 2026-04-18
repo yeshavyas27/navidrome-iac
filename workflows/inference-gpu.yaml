@@ -1,0 +1,198 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: gpu-inference-batch
+  namespace: argo
+spec:
+  # Run batch inference daily at 2 AM
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          serviceAccountName: navidrome-inference
+          nodeSelector:
+            gpu: "true"  # Run on GPU nodes
+          restartPolicy: OnFailure
+          containers:
+            - name: batch-inference
+              image: navidrome-serve:gpu-enabled
+              imagePullPolicy: IfNotPresent
+              command:
+                - python
+                - /app/batch_inference.py
+              env:
+                - name: CUDA_VISIBLE_DEVICES
+                  value: "0"
+                - name: MLFLOW_TRACKING_URI
+                  value: "http://mlflow.navidrome-platform.svc.cluster.local:5000"
+                - name: DATABASE_URL
+                  value: "postgresql://postgres.navidrome-platform.svc.cluster.local/navidrome"
+                - name: DB_USERNAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-credentials
+                      key: username
+                - name: DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: postgres-credentials
+                      key: password
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: minio-credentials
+                      key: accesskey
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: minio-credentials
+                      key: secretkey
+                - name: S3_ENDPOINT_URL
+                  value: "http://minio.navidrome-platform.svc.cluster.local:9000"
+              resources:
+                requests:
+                  cpu: 4
+                  memory: 16Gi
+                  nvidia.com/gpu: 1  # Request 1 GPU
+                limits:
+                  cpu: 8
+                  memory: 32Gi
+                  nvidia.com/gpu: 1
+              volumeMounts:
+                - name: model-cache
+                  mountPath: /model-cache
+          volumes:
+            - name: model-cache
+              persistentVolumeClaim:
+                claimName: model-cache-pvc
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: navidrome-inference
+  namespace: argo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: navidrome-inference
+  namespace: argo
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/logs"]
+    verbs: ["get", "list"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: navidrome-inference
+  namespace: argo
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: navidrome-inference
+subjects:
+  - kind: ServiceAccount
+    name: navidrome-inference
+    namespace: argo
+---
+# Deployment for real-time GPU inference (online serving)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: navidrome-serve-gpu
+  namespace: argo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: navidrome-serve-gpu
+  template:
+    metadata:
+      labels:
+        app: navidrome-serve-gpu
+    spec:
+      nodeSelector:
+        gpu: "true"  # Run on GPU nodes only
+      containers:
+        - name: serve
+          image: navidrome-serve:gpu-enabled
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5000
+              name: http
+          command:
+            - python
+            - /app/serve.py
+          env:
+            - name: CUDA_VISIBLE_DEVICES
+              value: "0"
+            - name: FLASK_ENV
+              value: "production"
+            - name: MLFLOW_TRACKING_URI
+              value: "http://mlflow.navidrome-platform.svc.cluster.local:5000"
+            - name: DATABASE_URL
+              value: "postgresql://postgres.navidrome-platform.svc.cluster.local/navidrome"
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-credentials
+                  key: password
+            - name: MODEL_BATCH_SIZE
+              value: "32"
+            - name: NUM_GPU_STREAMS
+              value: "4"
+          resources:
+            requests:
+              cpu: 2
+              memory: 8Gi
+              nvidia.com/gpu: 1
+            limits:
+              cpu: 4
+              memory: 16Gi
+              nvidia.com/gpu: 1
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          volumeMounts:
+            - name: model-cache
+              mountPath: /model-cache
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: model-cache-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: navidrome-serve-gpu
+  namespace: argo
+spec:
+  selector:
+    app: navidrome-serve-gpu
+  ports:
+    - port: 5000
+      targetPort: 5000
+  type: ClusterIP

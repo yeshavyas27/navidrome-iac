@@ -1,0 +1,6 @@
+apiVersion: v2
+name: navidrome-monitoring
+description: Prometheus + Grafana + Alertmanager monitoring stack for Navidrome MLOps
+type: application
+version: 1.0.0
+appVersion: "1.0.0"

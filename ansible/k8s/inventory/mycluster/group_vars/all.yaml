@@ -258,6 +258,11 @@ argocd_enabled: true
 # Use the following var to set admin password
 # argocd_admin_password: "password"
 
+# NVIDIA GPU Support
+nvidia_gpu_enabled: false  # Set to true if using GPU nodes
+nvidia_runtime_enabled: false  # Set to true if using GPU nodes
+nvidia_driver_version: "550"
+
 # The plugin manager for kubectl
 krew_enabled: false
 krew_root_dir: "/usr/local/krew"

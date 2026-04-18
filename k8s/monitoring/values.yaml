@@ -1,0 +1,82 @@
+# Navidrome Monitoring Stack Values
+
+namespace: navidrome-monitoring
+
+# Prometheus Configuration
+prometheus:
+  image: prom/prometheus:v2.48.1
+  replicas: 1
+  externalIP: "0.0.0.0"  # Set to internal node IP from terraform output
+  port: 9090
+  
+  # Resource requests/limits
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  
+  # Storage
+  storage:
+    size: 10Gi
+    storageClass: local-path
+  
+  # Retention
+  retention: 30d
+  
+  # Scrape interval
+  scrapeInterval: 15s
+  evaluationInterval: 15s
+
+# Grafana Configuration
+grafana:
+  image: grafana/grafana:10.2.2
+  replicas: 1
+  externalIP: "0.0.0.0"  # Set to internal node IP from terraform output
+  port: 3000
+  
+  # Admin credentials (change in production!)
+  adminUser: admin
+  adminPassword: admin
+  
+  # Resource requests/limits
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  
+  # Storage
+  storage:
+    size: 5Gi
+    storageClass: local-path
+
+# Alertmanager Configuration
+alertmanager:
+  image: prom/alertmanager:v0.26.0
+  replicas: 1
+  externalIP: "0.0.0.0"  # Set to internal node IP from terraform output
+  port: 9093
+  
+  # Resource requests/limits
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  
+  # Storage
+  storage:
+    size: 2Gi
+    storageClass: local-path
+
+# NVIDIA GPU Plugin (optional)
+nvidia_gpu_plugin:
+  enabled: false
+  image: nvcr.io/nvidia/k8s-device-plugin:v0.17.0
