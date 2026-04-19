@@ -1,0 +1,180 @@
+<mxfile>
+  <diagram name="Navidrome MLOps Architecture" id="navidrome-mlops">
+    <mxGraphModel dx="1200" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Chameleon Cloud outer box -->
+        <mxCell id="cloud" value="Chameleon Cloud — KVM@TACC" style="swimlane;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=14;startSize=30;" vertex="1" parent="1">
+          <mxGeometry x="20" y="20" width="1360" height="860" as="geometry" />
+        </mxCell>
+
+        <!-- VM box -->
+        <mxCell id="vm" value="VM: node1-mlops-proj05 — m1.xlarge (8 vCPU / 16GB RAM / 40GB)&#xa;Kubernetes v1.30 (kubespray) | Floating IP: 129.114.27.204" style="swimlane;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;fontSize=11;startSize=40;" vertex="1" parent="cloud">
+          <mxGeometry x="20" y="40" width="1320" height="800" as="geometry" />
+        </mxCell>
+
+        <!-- navidrome-platform namespace -->
+        <mxCell id="ns-platform" value="namespace: navidrome-platform" style="swimlane;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;startSize=25;" vertex="1" parent="vm">
+          <mxGeometry x="20" y="50" width="620" height="440" as="geometry" />
+        </mxCell>
+
+        <!-- Navidrome Custom -->
+        <mxCell id="navidrome" value="Navidrome (Custom Fork)&#xa;:4533 | externalIP&#xa;+ Recommendations page&#xa;+ User self-registration&#xa;+ Feedback scrobbler&#xa;PVC: /data 2Gi, /music 10Gi&#xa;251 FMA tracks loaded" style="rounded=1;whiteSpace=wrap;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;align=left;" vertex="1" parent="ns-platform">
+          <mxGeometry x="10" y="35" width="180" height="120" as="geometry" />
+        </mxCell>
+
+        <!-- navidrome-serve -->
+        <mxCell id="serve" value="navidrome-serve&#xa;:8080 (internal)&#xa;GRU4Rec model&#xa;745k item vocab&#xa;Prometheus /metrics&#xa;Popularity fallback" style="rounded=1;whiteSpace=wrap;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;align=left;" vertex="1" parent="ns-platform">
+          <mxGeometry x="210" y="35" width="160" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- Feedback API -->
+        <mxCell id="feedback" value="Feedback API&#xa;:8001 (externalIP)&#xa;Captures play sessions&#xa;Stores for retraining" style="rounded=1;whiteSpace=wrap;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;align=left;" vertex="1" parent="ns-platform">
+          <mxGeometry x="390" y="35" width="160" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- PostgreSQL -->
+        <mxCell id="postgres" value="PostgreSQL&#xa;:5432 (internal)&#xa;PVC: 5Gi&#xa;DBs: mlflow, navidrome" style="shape=cylinder3;whiteSpace=wrap;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=9;size=10;" vertex="1" parent="ns-platform">
+          <mxGeometry x="10" y="180" width="130" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- MinIO -->
+        <mxCell id="minio" value="MinIO&#xa;:9000 API / :9001 Console&#xa;PVC: 20Gi&#xa;Buckets: artifacts,&#xa;training-data, feedback,&#xa;mlflow-artifacts" style="shape=cylinder3;whiteSpace=wrap;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=9;size=10;" vertex="1" parent="ns-platform">
+          <mxGeometry x="160" y="180" width="150" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- MLflow -->
+        <mxCell id="mlflow" value="MLflow&#xa;:8000 (externalIP)&#xa;Model registry&#xa;Experiment tracking&#xa;artifacts → MinIO S3" style="rounded=1;whiteSpace=wrap;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;align=left;" vertex="1" parent="ns-platform">
+          <mxGeometry x="330" y="180" width="150" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- Redis -->
+        <mxCell id="redis" value="Redis 7.2&#xa;:6379 (internal)&#xa;PVC: 5Gi&#xa;Sessions, embeddings,&#xa;counters, features" style="shape=cylinder3;whiteSpace=wrap;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=9;size=10;" vertex="1" parent="ns-platform">
+          <mxGeometry x="10" y="290" width="130" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- Redis Exporter -->
+        <mxCell id="redis-exp" value="Redis Exporter&#xa;:9121&#xa;Prometheus metrics" style="rounded=1;whiteSpace=wrap;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" vertex="1" parent="ns-platform">
+          <mxGeometry x="160" y="310" width="120" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- Serve artifacts in MinIO -->
+        <mxCell id="serve-artifacts" value="Model artifacts&#xa;model.pt (182MB)&#xa;vocabs.pkl (7.2MB)" style="rounded=1;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;dashed=1;" vertex="1" parent="ns-platform">
+          <mxGeometry x="330" y="290" width="130" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Edges within platform -->
+        <mxCell id="e1" edge="1" source="navidrome" target="serve" parent="ns-platform" value="POST /recommend-by-tracks" style="fontSize=8;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" edge="1" source="navidrome" target="feedback" parent="ns-platform" value="scrobble events" style="fontSize=8;dashed=1;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" edge="1" source="navidrome" target="postgres" parent="ns-platform" value="reads/writes" style="fontSize=8;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" edge="1" source="mlflow" target="minio" parent="ns-platform" value="artifact store" style="fontSize=8;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" edge="1" source="mlflow" target="postgres" parent="ns-platform" value="backend store" style="fontSize=8;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" edge="1" source="serve" target="serve-artifacts" parent="ns-platform" value="loads model" style="fontSize=8;dashed=1;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" edge="1" source="feedback" target="postgres" parent="ns-platform" value="stores sessions" style="fontSize=8;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- navidrome-monitoring namespace -->
+        <mxCell id="ns-monitoring" value="namespace: navidrome-monitoring" style="swimlane;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=11;startSize=25;" vertex="1" parent="vm">
+          <mxGeometry x="660" y="50" width="300" height="200" as="geometry" />
+        </mxCell>
+
+        <!-- Prometheus -->
+        <mxCell id="prometheus" value="Prometheus&#xa;:9090 (externalIP)&#xa;PVC: 10Gi&#xa;10+ alert rules" style="rounded=1;whiteSpace=wrap;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;align=left;" vertex="1" parent="ns-monitoring">
+          <mxGeometry x="10" y="35" width="130" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Grafana -->
+        <mxCell id="grafana" value="Grafana&#xa;:3000 (externalIP)&#xa;PVC: 5Gi&#xa;admin/admin" style="rounded=1;whiteSpace=wrap;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;align=left;" vertex="1" parent="ns-monitoring">
+          <mxGeometry x="155" y="35" width="130" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- Alertmanager -->
+        <mxCell id="alertmanager" value="Alertmanager&#xa;:9093 (externalIP)&#xa;PVC: 2Gi&#xa;Alert routing" style="rounded=1;whiteSpace=wrap;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;align=left;" vertex="1" parent="ns-monitoring">
+          <mxGeometry x="10" y="120" width="130" height="65" as="geometry" />
+        </mxCell>
+
+        <!-- Monitoring edges -->
+        <mxCell id="em1" edge="1" source="prometheus" target="grafana" parent="ns-monitoring" value="datasource" style="fontSize=8;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="em2" edge="1" source="prometheus" target="alertmanager" parent="ns-monitoring" value="alerts" style="fontSize=8;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- argo namespace -->
+        <mxCell id="ns-argo" value="namespace: argo" style="swimlane;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;fontSize=11;startSize=25;" vertex="1" parent="vm">
+          <mxGeometry x="660" y="270" width="300" height="120" as="geometry" />
+        </mxCell>
+
+        <mxCell id="argo-wf" value="Argo Workflows&#xa;Build: navidrome-custom, serve&#xa;Train: GRU4Rec pipeline&#xa;Promote: staging → prod" style="rounded=1;whiteSpace=wrap;fillColor=#f8cecc;strokeColor=#b85450;fontSize=9;align=left;" vertex="1" parent="ns-argo">
+          <mxGeometry x="10" y="35" width="270" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- argocd namespace -->
+        <mxCell id="ns-argocd" value="namespace: argocd" style="swimlane;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;fontSize=11;startSize=25;" vertex="1" parent="vm">
+          <mxGeometry x="660" y="410" width="300" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="argocd" value="ArgoCD — GitOps sync from GitHub → deploys Helm charts" style="rounded=1;whiteSpace=wrap;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=9;" vertex="1" parent="ns-argocd">
+          <mxGeometry x="10" y="35" width="270" height="35" as="geometry" />
+        </mxCell>
+
+        <!-- kube-system -->
+        <mxCell id="ns-kube" value="namespace: kube-system" style="swimlane;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=10;fontColor=#333333;startSize=25;" vertex="1" parent="vm">
+          <mxGeometry x="20" y="510" width="620" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="kube-services" value="In-cluster Registry :5000 (navidrome-custom, navidrome-serve) | metrics-server | local-path-provisioner | calico networking" style="rounded=1;whiteSpace=wrap;fillColor=#f5f5f5;strokeColor=#666666;fontSize=9;" vertex="1" parent="ns-kube">
+          <mxGeometry x="10" y="35" width="590" height="35" as="geometry" />
+        </mxCell>
+
+        <!-- Data flow box -->
+        <mxCell id="dataflow" value="End-to-End ML Pipeline Flow:&#xa;1. User signs up → plays music (251 FMA tracks)&#xa;2. Feedback scrobbler → sends play sessions to Feedback API&#xa;3. Feedback API → stores in PostgreSQL&#xa;4. Training pipeline → reads data → trains GRU4Rec → logs to MLflow → saves model to MinIO&#xa;5. Serving container → loads model + vocab from MinIO PVC&#xa;6. User clicks Recommendations → Navidrome calls navidrome-serve (POST /recommend-by-tracks)&#xa;7. GRU4Rec inference → returns top-20 recommendations (with popularity fallback for OOV tracks)&#xa;8. Prometheus scrapes all services → Grafana dashboards → Alertmanager alerts" style="rounded=1;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;align=left;spacingLeft=10;spacingRight=10;" vertex="1" parent="vm">
+          <mxGeometry x="20" y="610" width="940" height="160" as="geometry" />
+        </mxCell>
+
+        <!-- External: User -->
+        <mxCell id="user" value="Users&#xa;(Browser)" style="shape=mxgraph.cisco.computers_and_peripherals.pc;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="vm">
+          <mxGeometry x="1030" y="80" width="80" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- Floating IP -->
+        <mxCell id="fip" value="Floating IP&#xa;129.114.27.204&#xa;:4533 :8000 :8001&#xa;:9001 :9090 :3000&#xa;:9093" style="ellipse;whiteSpace=wrap;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;fontSize=9;" vertex="1" parent="vm">
+          <mxGeometry x="1000" y="180" width="140" height="100" as="geometry" />
+        </mxCell>
+
+        <!-- GitHub -->
+        <mxCell id="github" value="GitHub&#xa;yeshavyas27/navidrome_mlops&#xa;(navidrome-custom branch)&#xa;vanshika2022/navidrome-recommendations&#xa;navidrome-iac" style="rounded=1;whiteSpace=wrap;fillColor=#f5f5f5;strokeColor=#666666;fontStyle=1;fontSize=9;" vertex="1" parent="vm">
+          <mxGeometry x="980" y="310" width="230" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- External edges -->
+        <mxCell id="eu1" edge="1" source="user" target="fip" parent="vm" value="" style="fontSize=9;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="eu2" edge="1" source="fip" target="navidrome" parent="vm" value=":4533" style="fontSize=8;edgeStyle=orthogonalEdgeStyle;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="eu3" edge="1" source="github" target="argocd" parent="vm" value="GitOps sync" style="fontSize=8;dashed=1;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
