@@ -20,17 +20,38 @@ spec:
       # Update this to the latest version before applying, e.g. v20260419-finetune-001
       - name: finetune-data-version
         value: "v20260419-finetune-001"
-      # AMD training image in the cluster registry
-      - name: image
-        value: "registry.kube-system.svc.cluster.local:5000/navidrome-train-amd:latest"
+
+    podMetadata:
+      annotations:
+        seccomp.security.alpha.kubernetes.io/pod: unconfined
+        container.apparmor.security.beta.kubernetes.io/main: unconfined
+
+    volumeClaimTemplates:
+    - metadata:
+        name: workdir
+      spec:
+        accessModes: [ "ReadWriteOnce" ]
+        resources:
+          requests:
+            storage: 5Gi
+
+    volumes:
+    - name: buildkitd
+      emptyDir: {}
 
     templates:
     - name: finetune-pipeline
       steps:
-      # Step 1: Find the latest model.pt + vocab.pkl keys in MinIO
+      # Step 1: Clone the repo so buildkit has the full train/ context
+      - - name: clone-repo
+          template: git-clone
+      # Step 2: Build train/docker_amd/Dockerfile and push to cluster registry
+      - - name: build-amd-image
+          template: buildkit-rootless
+      # Step 3: Find the latest model.pt + vocab.pkl keys in MinIO
       - - name: discover-latest-model
           template: discover-model
-      # Step 2: Run fine-tuning with the discovered checkpoint
+      # Step 4: Run fine-tuning inside the freshly built AMD image
       - - name: run-finetune
           template: finetune
           arguments:
@@ -39,6 +60,91 @@ spec:
               value: "{{steps.discover-latest-model.outputs.parameters.model-key}}"
             - name: pretrain-vocab-key
               value: "{{steps.discover-latest-model.outputs.parameters.vocab-key}}"
+
+    # ----------------------------------------------------------------
+    # git-clone: shallow-clone navidrome_mlops onto the shared volume
+    # ----------------------------------------------------------------
+    - name: git-clone
+      retryStrategy:
+        limit: "5"
+        retryPolicy: "Always"
+        backoff:
+          duration: "10s"
+          factor: "2"
+      container:
+        image: alpine/git:v2.26.2
+        workingDir: /mnt/workspace
+        env:
+        - name: GIT_TERMINAL_PROMPT
+          value: "0"
+        command: [git]
+        args:
+          - clone
+          - --depth
+          - "1"
+          - --filter=blob:none
+          - --no-tags
+          - --single-branch
+          - --branch
+          - navidrome-custom
+          - https://github.com/yeshavyas27/navidrome_mlops.git
+          - .
+        volumeMounts:
+        - name: workdir
+          mountPath: /mnt/workspace
+
+    # ----------------------------------------------------------------
+    # buildkit-rootless: builds train/docker_amd/Dockerfile
+    # Context : /mnt/workspace/train   (what COPY . . sees)
+    # Dockerfile: /mnt/workspace/train/docker_amd/Dockerfile
+    # Pushes to: registry.kube-system.svc.cluster.local:5000/navidrome-train-amd:latest
+    # ----------------------------------------------------------------
+    - name: buildkit-rootless
+      retryStrategy:
+        limit: "3"
+        retryPolicy: "Always"
+        backoff:
+          duration: "30s"
+          factor: "2"
+      container:
+        image: moby/buildkit:rootless
+        env:
+        - name: BUILDKITD_FLAGS
+          value: --oci-worker-no-process-sandbox
+        command: [buildctl-daemonless.sh]
+        args:
+          - build
+          - --frontend
+          - dockerfile.v0
+          - --local
+          - context=/mnt/workspace/train
+          - --local
+          - dockerfile=/mnt/workspace/train/docker_amd
+          - --output
+          - type=image,name=registry.kube-system.svc.cluster.local:5000/navidrome-train-amd:latest,push=true,registry.insecure=true
+          - --export-cache
+          - type=registry,ref=registry.kube-system.svc.cluster.local:5000/navidrome-train-amd:buildcache,mode=max,registry.insecure=true
+          - --import-cache
+          - type=registry,ref=registry.kube-system.svc.cluster.local:5000/navidrome-train-amd:buildcache,registry.insecure=true
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "1"
+        securityContext:
+          runAsUser: 1000
+          runAsGroup: 1000
+          seccompProfile:
+            type: Unconfined
+          appArmorProfile:
+            type: Unconfined
+        volumeMounts:
+        - name: workdir
+          mountPath: /mnt/workspace
+        - name: buildkitd
+          mountPath: /home/user/.local/share/buildkit
 
     # ----------------------------------------------------------------
     # discover-model: finds the most recently uploaded model.pt in
@@ -129,7 +235,7 @@ spec:
               key: secretkey
 
     # ----------------------------------------------------------------
-    # finetune: runs finetune_gru4rec.py inside the AMD training image
+    # finetune: runs finetune_gru4rec.py inside the freshly built AMD image
     # ----------------------------------------------------------------
     - name: finetune
       inputs:
@@ -137,7 +243,7 @@ spec:
         - name: pretrain-model-key
         - name: pretrain-vocab-key
       container:
-        image: "{{workflow.parameters.image}}"
+        image: registry.kube-system.svc.cluster.local:5000/navidrome-train-amd:latest
         workingDir: /home/appuser/work
         command: [python3, finetune_gru4rec.py]
         args:
