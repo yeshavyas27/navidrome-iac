@@ -97,11 +97,10 @@ spec:
           # Install git and curl
           apk add --no-cache git curl jq > /dev/null 2>&1
           
-          # Clone the repository
-          # TODO: update this URL to the actual navidrome-train repo
+          # Clone the training repository
           git clone --depth 1 --filter=blob:none --no-tags --single-branch \
-            --branch "{{inputs.parameters.branch}}" \
-            https://github.com/teaching-on-testbeds/navidrome-train.git .
+            --branch master \
+            https://github.com/yeshavyas27/navidrome_mlops.git .
           
           # Get current git commit
           GIT_COMMIT=$(git rev-parse HEAD)
