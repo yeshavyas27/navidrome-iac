@@ -33,11 +33,9 @@ spec:
         accessModes: [ "ReadWriteOnce" ]
         resources:
           requests:
-            storage: 5Gi
+            storage: 10Gi
 
-    volumes:
-    - name: buildkitd
-      emptyDir: {}
+    volumes: []
 
     templates:
     - name: finetune-pipeline
@@ -143,8 +141,9 @@ spec:
         volumeMounts:
         - name: workdir
           mountPath: /mnt/workspace
-        - name: buildkitd
+        - name: workdir
           mountPath: /home/user/.local/share/buildkit
+          subPath: .buildkit-cache
 
     # ----------------------------------------------------------------
     # discover-model: finds the most recently uploaded model.pt in
