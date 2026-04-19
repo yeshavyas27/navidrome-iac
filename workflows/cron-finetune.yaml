@@ -1,0 +1,175 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: cron-finetune
+spec:
+  # Runs every day at 11:00 PM UTC
+  # Format: minute hour day-of-month month day-of-week
+  schedule: "0 23 * * *"
+  timezone: "UTC"
+
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+
+  workflowSpec:
+    entrypoint: finetune-pipeline
+
+    arguments:
+      parameters:
+      # Swift dataset version to pull for fine-tuning data.
+      # Update this to the latest version before applying, e.g. v20260419-finetune-001
+      - name: finetune-data-version
+        value: "v20260419-finetune-001"
+      # AMD training image in the cluster registry
+      - name: image
+        value: "registry.kube-system.svc.cluster.local:5000/navidrome-train-amd:latest"
+
+    templates:
+    - name: finetune-pipeline
+      steps:
+      # Step 1: Find the latest model.pt + vocab.pkl keys in MinIO
+      - - name: discover-latest-model
+          template: discover-model
+      # Step 2: Run fine-tuning with the discovered checkpoint
+      - - name: run-finetune
+          template: finetune
+          arguments:
+            parameters:
+            - name: pretrain-model-key
+              value: "{{steps.discover-latest-model.outputs.parameters.model-key}}"
+            - name: pretrain-vocab-key
+              value: "{{steps.discover-latest-model.outputs.parameters.vocab-key}}"
+
+    # ----------------------------------------------------------------
+    # discover-model: finds the most recently uploaded model.pt in
+    # MinIO under finetune/ (falls back to pretrain/ if none exist).
+    # Derives the vocab.pkl key from the same prefix.
+    # ----------------------------------------------------------------
+    - name: discover-model
+      outputs:
+        parameters:
+        - name: model-key
+          valueFrom:
+            path: /var/run/argo/outputs/parameters/model-key
+        - name: vocab-key
+          valueFrom:
+            path: /var/run/argo/outputs/parameters/vocab-key
+      retryStrategy:
+        limit: "3"
+        retryPolicy: "Always"
+        backoff:
+          duration: "10s"
+          factor: "2"
+      container:
+        image: python:3.11-slim
+        command: [sh, -c]
+        args:
+          - |
+            set -eu
+            pip install boto3 --quiet --disable-pip-version-check
+
+            python3 - <<'PYEOF'
+            import os, sys, boto3
+
+            url    = os.environ["MINIO_URL"]
+            user   = os.environ["MINIO_USER"]
+            pwd    = os.environ["MINIO_PASSWORD"]
+            bucket = os.environ.get("MINIO_BUCKET", "artifacts")
+
+            s3 = boto3.client(
+                "s3",
+                endpoint_url=url,
+                aws_access_key_id=user,
+                aws_secret_access_key=pwd,
+                region_name="us-east-1",
+            )
+
+            def latest_model_in(prefix):
+                paginator = s3.get_paginator("list_objects_v2")
+                best_key, best_ts = None, None
+                for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+                    for obj in page.get("Contents", []):
+                        if obj["Key"].endswith("/model.pt"):
+                            if best_ts is None or obj["LastModified"] > best_ts:
+                                best_key = obj["Key"]
+                                best_ts  = obj["LastModified"]
+                return best_key
+
+            # Prefer the latest finetune checkpoint; fall back to pretrain
+            model_key = latest_model_in("finetune/") or latest_model_in("pretrain/")
+            if not model_key:
+                print("ERROR: no model.pt found in MinIO bucket", file=sys.stderr)
+                sys.exit(1)
+
+            vocab_key = model_key.rsplit("/model.pt", 1)[0] + "/vocab.pkl"
+
+            os.makedirs("/var/run/argo/outputs/parameters", exist_ok=True)
+            with open("/var/run/argo/outputs/parameters/model-key", "w") as f:
+                f.write(model_key)
+            with open("/var/run/argo/outputs/parameters/vocab-key", "w") as f:
+                f.write(vocab_key)
+
+            print(f"model-key : {model_key}")
+            print(f"vocab-key : {vocab_key}")
+            PYEOF
+        env:
+        - name: MINIO_URL
+          value: "http://129.114.27.204:9000"
+        - name: MINIO_BUCKET
+          value: "artifacts"
+        - name: MINIO_USER
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials
+              key: accesskey
+        - name: MINIO_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials
+              key: secretkey
+
+    # ----------------------------------------------------------------
+    # finetune: runs finetune_gru4rec.py inside the AMD training image
+    # ----------------------------------------------------------------
+    - name: finetune
+      inputs:
+        parameters:
+        - name: pretrain-model-key
+        - name: pretrain-vocab-key
+      container:
+        image: "{{workflow.parameters.image}}"
+        workingDir: /home/appuser/work
+        command: [python3, finetune_gru4rec.py]
+        args:
+          - --pretrain-model-key
+          - "{{inputs.parameters.pretrain-model-key}}"
+          - --pretrain-vocab-key
+          - "{{inputs.parameters.pretrain-vocab-key}}"
+          - --finetune-data-version
+          - "{{workflow.parameters.finetune-data-version}}"
+        env:
+        - name: MLFLOW_TRACKING_URI
+          value: "http://129.114.27.204:8000"
+        - name: MINIO_URL
+          value: "http://129.114.27.204:9000"
+        - name: MINIO_BUCKET
+          value: "artifacts"
+        - name: MINIO_USER
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials
+              key: accesskey
+        - name: MINIO_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: minio-credentials
+              key: secretkey
+        resources:
+          requests:
+            memory: "8Gi"
+            cpu: "2"
+            amd.com/gpu: "1"
+          limits:
+            memory: "16Gi"
+            cpu: "4"
+            amd.com/gpu: "1"
