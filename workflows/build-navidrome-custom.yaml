@@ -18,7 +18,7 @@ spec:
       accessModes: ["ReadWriteOnce"]
       resources:
         requests:
-          storage: 2Gi
+          storage: 5Gi
 
   volumes:
   - name: buildkitd
@@ -48,6 +48,8 @@ spec:
         - --depth
         - "1"
         - --single-branch
+        - --branch
+        - navidrome-custom
         - https://github.com/yeshavyas27/navidrome_mlops.git
         - .
       volumeMounts:
@@ -68,11 +70,11 @@ spec:
         value: --oci-worker-no-process-sandbox
       resources:
         requests:
-          memory: "2Gi"
-          cpu: "500m"
+          memory: "4Gi"
+          cpu: "2"
         limits:
-          memory: "3Gi"
-          cpu: "1"
+          memory: "6Gi"
+          cpu: "4"
       command: [buildctl-daemonless.sh]
       args:
         - build
