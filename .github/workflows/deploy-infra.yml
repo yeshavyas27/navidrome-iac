@@ -27,7 +27,11 @@ jobs:
             git clone --depth 1 https://github.com/salawhaaat/navidrome-iac.git navidrome-iac-deploy
             cd navidrome-iac-deploy
 
-            INTERNAL_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+            # Use the sharednet IP (ens3) where the floating IP routes, NOT the private network IP
+            INTERNAL_IP=$(ip -4 addr show ens3 | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+            if [ -z "$INTERNAL_IP" ]; then
+              INTERNAL_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+            fi
             echo "Internal IP: $INTERNAL_IP"
 
             echo "=== Upgrading platform Helm chart ==="
@@ -48,6 +52,13 @@ jobs:
               --set alertmanager.externalIP=$INTERNAL_IP \
               --timeout 5m \
               2>&1 || echo "Monitoring upgrade failed, continuing..."
+
+            echo "=== Re-adding hostPath music volume to Navidrome ==="
+            kubectl get deployment navidrome -n navidrome-platform -o jsonpath='{.spec.template.spec.volumes[*].name}' | grep -q external-music || \
+            kubectl patch deployment navidrome -n navidrome-platform --type='json' -p='[
+              {"op":"add","path":"/spec/template/spec/volumes/-","value":{"name":"external-music","hostPath":{"path":"/mnt/music-storage/music/audio_complete","type":"Directory"}}},
+              {"op":"add","path":"/spec/template/spec/containers/0/volumeMounts/-","value":{"name":"external-music","mountPath":"/music/audio_complete","readOnly":true}}
+            ]' 2>&1 || echo "hostPath already exists or patch failed"
 
             echo "=== Applying Argo workflow templates ==="
             for f in workflows/*.yaml; do
