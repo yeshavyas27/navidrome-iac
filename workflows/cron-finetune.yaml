@@ -12,6 +12,10 @@ spec:
 
   workflowSpec:
     entrypoint: finetune-pipeline
+    # Needs permission to kubectl set env on navidrome-serve deployment.
+    # Bind the argo-workflow ServiceAccount to the finetune-deploy ClusterRole
+    # (see navidrome-iac/k8s/platform/templates/argo-rbac.yaml).
+    serviceAccountName: argo-workflow
 
     arguments:
       parameters:
@@ -19,13 +23,102 @@ spec:
         value: "v20260419-finetune-001"
       - name: mi100-host
         value: "129.114.108.202"
+      - name: mlflow-url
+        value: "http://mlflow.navidrome-platform.svc.cluster.local:8000"
+      - name: serve-deployment
+        value: "navidrome-serve"
+      - name: serve-namespace
+        value: "navidrome-platform"
+      - name: serve-url
+        value: "http://navidrome-serve.navidrome-platform.svc.cluster.local:8080"
 
     templates:
     - name: finetune-pipeline
       steps:
+      # Step 1: SSH into MI100, run finetune, upload model to MinIO
       - - name: ssh-finetune
           template: ssh-and-run
 
+      # Step 2: Query MLflow for the minio_model_key tag on the latest finetune run
+      - - name: get-minio-key
+          template: query-mlflow-key
+          arguments:
+            parameters:
+            - name: mlflow-url
+              value: "{{workflow.parameters.mlflow-url}}"
+
+      # Step 3: Save the currently deployed key before overwriting (enables rollback)
+      - - name: backup-current-key
+          template: save-current-key
+          arguments:
+            parameters:
+            - name: deployment
+              value: "{{workflow.parameters.serve-deployment}}"
+            - name: namespace
+              value: "{{workflow.parameters.serve-namespace}}"
+
+      # Step 4: Deploy new model — set MINIO_MODEL_KEY, wait for rollout.
+      # Startup sanity check in app.py runs here; if model is corrupted the
+      # pod crashes → rollout times out → this step fails → pipeline stops.
+      - - name: deploy-model
+          template: set-minio-key
+          arguments:
+            parameters:
+            - name: minio-key
+              value: "{{steps.get-minio-key.outputs.parameters.minio-key}}"
+            - name: deployment
+              value: "{{workflow.parameters.serve-deployment}}"
+            - name: namespace
+              value: "{{workflow.parameters.serve-namespace}}"
+
+      # Step 5: Integration test — health, version, and a real recommend call
+      - - name: integration-test
+          template: run-integration-test
+          arguments:
+            parameters:
+            - name: serve-url
+              value: "{{workflow.parameters.serve-url}}"
+            - name: minio-key
+              value: "{{steps.get-minio-key.outputs.parameters.minio-key}}"
+
+      # Step 6: Load test — 10 concurrent workers for 30s, p95 < 500ms
+      - - name: load-test
+          template: run-load-test
+          arguments:
+            parameters:
+            - name: serve-url
+              value: "{{workflow.parameters.serve-url}}"
+          when: "'{{steps.integration-test.outputs.parameters.result}}' == 'pass'"
+
+      # Step 7: Rollback if either test failed — restore the previous key
+      - - name: rollback
+          template: restore-key
+          arguments:
+            parameters:
+            - name: backup-key
+              value: "{{steps.backup-current-key.outputs.parameters.backup-key}}"
+            - name: deployment
+              value: "{{workflow.parameters.serve-deployment}}"
+            - name: namespace
+              value: "{{workflow.parameters.serve-namespace}}"
+          when: >-
+            '{{steps.integration-test.outputs.parameters.result}}' == 'fail' ||
+            '{{steps.load-test.outputs.parameters.result}}' == 'fail'
+
+      # Step 8: Tag run as @live in MLflow if all tests passed
+      - - name: mark-live
+          template: set-mlflow-live-alias
+          arguments:
+            parameters:
+            - name: mlflow-url
+              value: "{{workflow.parameters.mlflow-url}}"
+            - name: minio-key
+              value: "{{steps.get-minio-key.outputs.parameters.minio-key}}"
+          when: >-
+            '{{steps.integration-test.outputs.parameters.result}}' == 'pass' &&
+            '{{steps.load-test.outputs.parameters.result}}' == 'pass'
+
+    # ── Template: SSH into MI100 and run finetune ─────────────────────────
     - name: ssh-and-run
       container:
         image: alpine:3.19
@@ -34,12 +127,10 @@ spec:
           - |
             set -eu
             apk add --no-cache openssh-client
-
             mkdir -p ~/.ssh
             cp /secret/id_rsa ~/.ssh/id_rsa
             chmod 600 ~/.ssh/id_rsa
             ssh-keyscan -H "{{workflow.parameters.mi100-host}}" >> ~/.ssh/known_hosts 2>/dev/null
-
             ssh -i ~/.ssh/id_rsa \
               -o StrictHostKeyChecking=no \
               cc@{{workflow.parameters.mi100-host}} \
@@ -48,8 +139,311 @@ spec:
         - name: ssh-key
           mountPath: /secret
           readOnly: true
-
       volumes:
       - name: ssh-key
         secret:
           secretName: chameleon-ssh-key
+
+    # ── Template: Query MLflow for the latest finetune run's minio_model_key ─
+    - name: query-mlflow-key
+      inputs:
+        parameters:
+        - name: mlflow-url
+      outputs:
+        parameters:
+        - name: minio-key
+          valueFrom:
+            path: /tmp/minio_key.txt
+      script:
+        image: python:3.11-slim
+        command: [python]
+        source: |
+          import sys, requests
+
+          MLFLOW = "{{inputs.parameters.mlflow-url}}"
+          EXPERIMENT = "30music-session-recommendation-finetune"
+
+          # Get experiment ID
+          r = requests.get(f"{MLFLOW}/api/2.0/mlflow/experiments/get-by-name",
+                           params={"experiment_name": EXPERIMENT})
+          r.raise_for_status()
+          exp_id = r.json()["experiment"]["experiment_id"]
+
+          # Get latest run
+          r = requests.post(f"{MLFLOW}/api/2.0/mlflow/runs/search",
+                            json={"experiment_ids": [exp_id],
+                                  "max_results": 1,
+                                  "order_by": ["start_time DESC"]})
+          r.raise_for_status()
+          runs = r.json().get("runs", [])
+          if not runs:
+              print("ERROR: no finetune runs found in MLflow", file=sys.stderr)
+              sys.exit(1)
+
+          run = runs[0]
+          tags = {t["key"]: t["value"] for t in run["data"].get("tags", [])}
+          key = tags.get("minio_model_key", "")
+          if not key:
+              print("ERROR: minio_model_key tag not found on latest run", file=sys.stderr)
+              sys.exit(1)
+
+          print(f"Latest finetune run: {run['info']['run_id']}")
+          print(f"MinIO model key: {key}")
+          open("/tmp/minio_key.txt", "w").write(key)
+
+    # ── Template: Save the current MINIO_MODEL_KEY for rollback ──────────
+    - name: save-current-key
+      inputs:
+        parameters:
+        - name: deployment
+        - name: namespace
+      outputs:
+        parameters:
+        - name: backup-key
+          valueFrom:
+            path: /tmp/backup_key.txt
+      container:
+        image: bitnami/kubectl:latest
+        command: [sh, -c]
+        args:
+          - |
+            KEY=$(kubectl get deployment {{inputs.parameters.deployment}} \
+              -n {{inputs.parameters.namespace}} \
+              -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="MINIO_MODEL_KEY")].value}' \
+              2>/dev/null || echo "")
+            echo "Current MINIO_MODEL_KEY: '${KEY}'"
+            echo "$KEY" > /tmp/backup_key.txt
+
+    # ── Template: Set MINIO_MODEL_KEY and wait for healthy rollout ────────
+    - name: set-minio-key
+      inputs:
+        parameters:
+        - name: minio-key
+        - name: deployment
+        - name: namespace
+      container:
+        image: bitnami/kubectl:latest
+        command: [sh, -c]
+        args:
+          - |
+            set -eu
+            echo "Setting MINIO_MODEL_KEY={{inputs.parameters.minio-key}} on {{inputs.parameters.deployment}}"
+            kubectl set env deployment/{{inputs.parameters.deployment}} \
+              -n {{inputs.parameters.namespace}} \
+              MINIO_MODEL_KEY="{{inputs.parameters.minio-key}}"
+
+            echo "Waiting for rollout (startup sanity check runs here)..."
+            kubectl rollout status deployment/{{inputs.parameters.deployment}} \
+              -n {{inputs.parameters.namespace}} \
+              --timeout=120s
+            echo "Rollout complete — model loaded and sanity check passed."
+
+    # ── Template: Integration test against serving pod ────────────────────
+    - name: run-integration-test
+      inputs:
+        parameters:
+        - name: serve-url
+        - name: minio-key
+      outputs:
+        parameters:
+        - name: result
+          valueFrom:
+            path: /tmp/result.txt
+      script:
+        image: curlimages/curl:latest
+        command: [sh]
+        source: |
+          #!/bin/sh
+          BASE="{{inputs.parameters.serve-url}}"
+          EXPECTED_KEY="{{inputs.parameters.minio-key}}"
+
+          # 1) /health — model_loaded must be true
+          for i in $(seq 1 12); do
+            HEALTH=$(curl -sf "$BASE/health" 2>/dev/null || true)
+            if echo "$HEALTH" | grep -q '"model_loaded":true'; then
+              echo "Health OK: $HEALTH"
+              break
+            fi
+            echo "Waiting for health... ($i/12)"
+            sleep 5
+          done
+          if ! echo "$HEALTH" | grep -q '"model_loaded":true'; then
+            echo "FAIL: model not loaded after 60s"
+            echo "fail" > /tmp/result.txt
+            exit 1
+          fi
+
+          # 2) /version — loaded_model_key must match what we just deployed
+          VERSION=$(curl -sf "$BASE/version" 2>/dev/null || true)
+          echo "Version: $VERSION"
+          if ! echo "$VERSION" | grep -q "$EXPECTED_KEY"; then
+            echo "FAIL: serving pod loaded wrong model key"
+            echo "Expected: $EXPECTED_KEY"
+            echo "Got: $VERSION"
+            echo "fail" > /tmp/result.txt
+            exit 1
+          fi
+
+          # 3) /recommend-by-tracks — must return recommendations
+          RESP=$(curl -sf -X POST "$BASE/recommend-by-tracks" \
+            -H "Content-Type: application/json" \
+            -d '{"session_id":"finetune-ci","user_id":0,"track_ids":["1","2","3"],"top_n":5}' \
+            2>/dev/null || true)
+          echo "Recommend: $RESP"
+          if echo "$RESP" | grep -q '"recommendations"'; then
+            echo "PASS: integration test passed"
+            echo "pass" > /tmp/result.txt
+          else
+            echo "FAIL: /recommend-by-tracks did not return recommendations"
+            echo "fail" > /tmp/result.txt
+            exit 1
+          fi
+
+    # ── Template: Load test ───────────────────────────────────────────────
+    - name: run-load-test
+      inputs:
+        parameters:
+        - name: serve-url
+      outputs:
+        parameters:
+        - name: result
+          valueFrom:
+            path: /tmp/result.txt
+      script:
+        image: python:3.11-slim
+        command: [python]
+        source: |
+          import concurrent.futures, requests, statistics, sys, time
+
+          URL = "{{inputs.parameters.serve-url}}/recommend-by-tracks"
+          PAYLOAD = {
+              "session_id": "load-test-finetune",
+              "user_id": 0,
+              "track_ids": ["1", "2", "3", "4", "5"],
+              "top_n": 10,
+          }
+          WORKERS = 10
+          DURATION_SEC = 30
+          P95_THRESHOLD_MS = 500
+
+          latencies, errors = [], 0
+          deadline = time.time() + DURATION_SEC
+
+          def send():
+              t = time.time()
+              try:
+                  r = requests.post(URL, json=PAYLOAD, timeout=5)
+                  r.raise_for_status()
+                  return (time.time() - t) * 1000
+              except Exception as e:
+                  print(f"Request error: {e}")
+                  return None
+
+          with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as ex:
+              futures = []
+              while time.time() < deadline:
+                  futures.append(ex.submit(send))
+                  time.sleep(0.01)
+              for f in concurrent.futures.as_completed(futures):
+                  result = f.result()
+                  if result is None:
+                      errors += 1
+                  else:
+                      latencies.append(result)
+
+          if not latencies:
+              print("FAIL: no successful requests")
+              open("/tmp/result.txt", "w").write("fail")
+              sys.exit(1)
+
+          total = len(latencies) + errors
+          p95 = statistics.quantiles(latencies, n=100)[94]
+          p99 = statistics.quantiles(latencies, n=100)[98]
+          error_rate = errors / total if total else 1.0
+
+          print(f"Requests: {total}  Errors: {errors} ({error_rate:.1%})")
+          print(f"Latency p95={p95:.0f}ms  p99={p99:.0f}ms  threshold={P95_THRESHOLD_MS}ms")
+
+          if p95 > P95_THRESHOLD_MS:
+              print(f"FAIL: p95 {p95:.0f}ms > {P95_THRESHOLD_MS}ms threshold")
+              open("/tmp/result.txt", "w").write("fail")
+              sys.exit(1)
+
+          if error_rate > 0.05:
+              print(f"FAIL: error rate {error_rate:.1%} > 5%")
+              open("/tmp/result.txt", "w").write("fail")
+              sys.exit(1)
+
+          print("PASS")
+          open("/tmp/result.txt", "w").write("pass")
+
+    # ── Template: Rollback to previous model key ──────────────────────────
+    - name: restore-key
+      inputs:
+        parameters:
+        - name: backup-key
+        - name: deployment
+        - name: namespace
+      container:
+        image: bitnami/kubectl:latest
+        command: [sh, -c]
+        args:
+          - |
+            BACKUP="{{inputs.parameters.backup-key}}"
+            echo "Tests failed — rolling back {{inputs.parameters.deployment}}"
+            if [ -n "$BACKUP" ]; then
+              echo "Restoring MINIO_MODEL_KEY=$BACKUP"
+              kubectl set env deployment/{{inputs.parameters.deployment}} \
+                -n {{inputs.parameters.namespace}} \
+                MINIO_MODEL_KEY="$BACKUP"
+            else
+              echo "No backup key — removing MINIO_MODEL_KEY (reverts to auto-discovery)"
+              kubectl set env deployment/{{inputs.parameters.deployment}} \
+                -n {{inputs.parameters.namespace}} \
+                MINIO_MODEL_KEY-
+            fi
+            kubectl rollout status deployment/{{inputs.parameters.deployment}} \
+              -n {{inputs.parameters.namespace}} \
+              --timeout=120s
+            echo "Rollback complete."
+
+    # ── Template: Tag MLflow run as @live ─────────────────────────────────
+    - name: set-mlflow-live-alias
+      inputs:
+        parameters:
+        - name: mlflow-url
+        - name: minio-key
+      script:
+        image: python:3.11-slim
+        command: [python]
+        source: |
+          import requests, sys
+
+          MLFLOW = "{{inputs.parameters.mlflow-url}}"
+          TARGET_KEY = "{{inputs.parameters.minio-key}}"
+          EXPERIMENT = "30music-session-recommendation-finetune"
+
+          # Find the run with this minio_model_key tag
+          r = requests.get(f"{MLFLOW}/api/2.0/mlflow/experiments/get-by-name",
+                           params={"experiment_name": EXPERIMENT})
+          r.raise_for_status()
+          exp_id = r.json()["experiment"]["experiment_id"]
+
+          r = requests.post(f"{MLFLOW}/api/2.0/mlflow/runs/search",
+                            json={"experiment_ids": [exp_id],
+                                  "filter_string": f"tags.minio_model_key = '{TARGET_KEY}'",
+                                  "max_results": 1})
+          r.raise_for_status()
+          runs = r.json().get("runs", [])
+          if not runs:
+              print(f"WARNING: could not find run with minio_model_key={TARGET_KEY}")
+              sys.exit(0)
+
+          run_id = runs[0]["info"]["run_id"]
+
+          # Tag the run as live
+          requests.post(f"{MLFLOW}/api/2.0/mlflow/runs/set-tag",
+                        json={"run_id": run_id, "key": "deployment_status", "value": "live"})
+
+          print(f"Tagged run {run_id} as deployment_status=live")
+          print(f"Model {TARGET_KEY} passed all gates and is now serving production traffic.")

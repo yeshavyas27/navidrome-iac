@@ -1,0 +1,40 @@
+# RBAC for the argo-workflow ServiceAccount
+#
+# The cron-finetune CronWorkflow (workflows/cron-finetune.yaml) runs as
+# serviceAccountName: argo-workflow and needs to:
+#   - kubectl set env   → update MINIO_MODEL_KEY on the navidrome-serve deployment
+#   - kubectl rollout status → wait for pod to become ready
+#
+# The ClusterRole is cluster-scoped so we can bind it in any namespace.
+# The ClusterRoleBinding grants it to the argo-workflow SA in the argo namespace.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: finetune-deploy
+rules:
+  # Read + patch deployments (needed by `kubectl set env` and `kubectl rollout status`)
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "patch", "update"]
+  # `kubectl rollout status` watches the ReplicaSet underneath
+  - apiGroups: ["apps"]
+    resources: ["replicasets"]
+    verbs: ["get", "list", "watch"]
+  # Needed by `kubectl rollout status` to watch pod state
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: argo-workflow-finetune-deploy
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow
+    namespace: argo
+roleRef:
+  kind: ClusterRole
+  name: finetune-deploy
+  apiGroup: rbac.authorization.k8s.io
