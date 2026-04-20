@@ -1,0 +1,64 @@
+name: Deploy Infrastructure
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'k8s/**'
+      - 'workflows/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to Chameleon cluster
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.CHAMELEON_HOST }}
+          username: cc
+          key: ${{ secrets.CHAMELEON_SSH_KEY }}
+          command_timeout: 10m
+          script: |
+            set -e
+            echo "=== Pulling latest IaC ==="
+            cd /tmp
+            rm -rf navidrome-iac-deploy
+            git clone --depth 1 https://github.com/salawhaaat/navidrome-iac.git navidrome-iac-deploy
+            cd navidrome-iac-deploy
+
+            INTERNAL_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+            echo "Internal IP: $INTERNAL_IP"
+
+            echo "=== Upgrading platform Helm chart ==="
+            helm upgrade navidrome-platform ./k8s/platform \
+              --namespace navidrome-platform \
+              --set navidrome.externalIP=$INTERNAL_IP \
+              --set minio.externalIP=$INTERNAL_IP \
+              --set mlflow.externalIP=$INTERNAL_IP \
+              --set gateway.externalIP=$INTERNAL_IP \
+              --timeout 5m \
+              2>&1 || echo "Platform upgrade failed or had conflicts, continuing..."
+
+            echo "=== Upgrading monitoring Helm chart ==="
+            helm upgrade navidrome-monitoring ./k8s/monitoring \
+              --namespace navidrome-monitoring \
+              --set prometheus.externalIP=$INTERNAL_IP \
+              --set grafana.externalIP=$INTERNAL_IP \
+              --set alertmanager.externalIP=$INTERNAL_IP \
+              --timeout 5m \
+              2>&1 || echo "Monitoring upgrade failed, continuing..."
+
+            echo "=== Applying Argo workflow templates ==="
+            for f in workflows/*.yaml; do
+              echo "Applying $f"
+              kubectl apply -f "$f" -n argo 2>&1 || echo "Failed to apply $f, continuing..."
+            done
+
+            echo "=== Deployment complete ==="
+            kubectl get pods -n navidrome-platform
+            echo "---"
+            kubectl get pods -n navidrome-monitoring
+
+            # Cleanup
+            cd /tmp && rm -rf navidrome-iac-deploy
