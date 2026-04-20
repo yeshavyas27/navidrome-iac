@@ -1,12 +1,12 @@
-# RBAC for the argo-workflow ServiceAccount
+# RBAC for Argo service accounts that need to manage deployments.
 #
-# The cron-finetune CronWorkflow (workflows/cron-finetune.yaml) runs as
-# serviceAccountName: argo-workflow and needs to:
-#   - kubectl set env   → update MINIO_MODEL_KEY on the navidrome-serve deployment
-#   - kubectl rollout status → wait for pod to become ready
+# Bound to both:
+#   - argo-workflow  (used by cron-finetune and explicitly-serviceAccountName'd workflows)
+#   - default        (used by ad-hoc / CI-triggered workflows that don't set serviceAccountName)
 #
-# The ClusterRole is cluster-scoped so we can bind it in any namespace.
-# The ClusterRoleBinding grants it to the argo-workflow SA in the argo namespace.
+# Permissions needed:
+#   - kubectl set env / kubectl rollout status on navidrome-serve (navidrome-platform ns)
+#   - kubectl get/patch deployments for restart-deployment steps
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -33,6 +33,9 @@ metadata:
 subjects:
   - kind: ServiceAccount
     name: argo-workflow
+    namespace: argo
+  - kind: ServiceAccount
+    name: default
     namespace: argo
 roleRef:
   kind: ClusterRole
