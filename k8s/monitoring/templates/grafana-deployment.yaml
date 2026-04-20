@@ -19,6 +19,7 @@ data:
     datasources:
       - name: Prometheus
         type: prometheus
+        uid: prometheus-ds
         access: proxy
         url: http://prometheus:{{ .Values.prometheus.port }}
         isDefault: true
@@ -62,6 +63,162 @@ data:
         ]
       }
     }
+---
+# Grafana Unified Alerting provisioning:
+#   - rules.yaml → ML serving alert rules (PromQL), visible on dashboard only
+#
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-alerting
+  namespace: {{ .Values.namespace }}
+data:
+  rules.yaml: |
+    apiVersion: 1
+    groups:
+      - orgId: 1
+        name: ml-serving
+        folder: ML Serving Alerts
+        interval: 1m
+        rules:
+
+          # ── Operational ──────────────────────────────────────────────────
+          - uid: rec-high-error-rate
+            title: "High Recommendation Error Rate"
+            condition: threshold
+            for: 2m
+            labels:
+              severity: critical
+              team: ml
+            annotations:
+              summary: "Error rate > 5% on /recommend — check serving logs"
+            data:
+              - refId: A
+                relativeTimeRange: { from: 300, to: 0 }
+                datasourceUid: prometheus-ds
+                model:
+                  expr: |
+                    sum(rate(recommend_requests_total{status!="200"}[5m]))
+                    / sum(rate(recommend_requests_total[5m]))
+                  instant: true
+              - refId: threshold
+                datasourceUid: "-100"
+                model:
+                  type: threshold
+                  conditions:
+                    - evaluator: { type: gt, params: [0.05] }
+                      reducer: { type: last }
+                      query: { params: [A] }
+
+          - uid: rec-high-latency-p99
+            title: "High Recommendation Latency (p99)"
+            condition: threshold
+            for: 5m
+            labels:
+              severity: critical
+              team: ml
+            annotations:
+              summary: "p99 latency > 1s on /recommend — model or infra issue"
+            data:
+              - refId: A
+                relativeTimeRange: { from: 300, to: 0 }
+                datasourceUid: prometheus-ds
+                model:
+                  expr: |
+                    histogram_quantile(0.99,
+                      sum(rate(recommend_latency_seconds_bucket[5m])) by (le)
+                    )
+                  instant: true
+              - refId: threshold
+                datasourceUid: "-100"
+                model:
+                  type: threshold
+                  conditions:
+                    - evaluator: { type: gt, params: [1.0] }
+                      reducer: { type: last }
+                      query: { params: [A] }
+
+          # ── ML Quality ───────────────────────────────────────────────────
+          - uid: rec-high-oov-rate
+            title: "High OOV Item Rate (Vocab Drift)"
+            condition: threshold
+            for: 10m
+            labels:
+              severity: warning
+              team: ml
+            annotations:
+              summary: "OOV rate > 10/s — item catalog may have drifted from training vocab"
+            data:
+              - refId: A
+                relativeTimeRange: { from: 600, to: 0 }
+                datasourceUid: prometheus-ds
+                model:
+                  expr: rate(recommend_oov_items_total[5m])
+                  instant: true
+              - refId: threshold
+                datasourceUid: "-100"
+                model:
+                  type: threshold
+                  conditions:
+                    - evaluator: { type: gt, params: [10] }
+                      reducer: { type: last }
+                      query: { params: [A] }
+
+          - uid: rec-cold-start-saturated
+            title: "Cold-Start Saturated (>50% Requests)"
+            condition: threshold
+            for: 15m
+            labels:
+              severity: warning
+              team: ml
+            annotations:
+              summary: ">50% of requests are cold-start — model may be stale, consider retraining"
+            data:
+              - refId: A
+                relativeTimeRange: { from: 900, to: 0 }
+                datasourceUid: prometheus-ds
+                model:
+                  expr: |
+                    rate(recommend_cold_start_activations_total[5m])
+                    / rate(recommend_requests_total{status="200"}[5m])
+                  instant: true
+              - refId: threshold
+                datasourceUid: "-100"
+                model:
+                  type: threshold
+                  conditions:
+                    - evaluator: { type: gt, params: [0.5] }
+                      reducer: { type: last }
+                      query: { params: [A] }
+
+          # ── Drift ────────────────────────────────────────────────────────
+          - uid: rec-low-confidence
+            title: "Low Recommendation Confidence"
+            condition: threshold
+            for: 10m
+            labels:
+              severity: warning
+              team: ml
+            annotations:
+              summary: "Avg top-1 score < 0.3 — model confidence degraded, check for drift"
+            data:
+              - refId: A
+                relativeTimeRange: { from: 600, to: 0 }
+                datasourceUid: prometheus-ds
+                model:
+                  expr: |
+                    sum(rate(recommend_top1_score_sum[10m]))
+                    / sum(rate(recommend_top1_score_count[10m]))
+                  instant: true
+              - refId: threshold
+                datasourceUid: "-100"
+                model:
+                  type: threshold
+                  conditions:
+                    - evaluator: { type: lt, params: [0.3] }
+                      reducer: { type: last }
+                      query: { params: [A] }
+
 ---
 apiVersion: v1
 kind: Service
@@ -131,6 +288,13 @@ spec:
                   key: admin-password
             - name: GF_INSTALL_PLUGINS
               value: "grafana-piechart-panel"
+            # Unified alerting (Grafana 10 default; explicit for clarity)
+            - name: GF_UNIFIED_ALERTING_ENABLED
+              value: "true"
+            - name: GF_ALERTING_ENABLED
+              value: "false"
+            - name: GF_SMTP_ENABLED
+              value: "false"
           volumeMounts:
             - name: grafana-storage
               mountPath: /var/lib/grafana
@@ -138,6 +302,8 @@ spec:
               mountPath: /etc/grafana/provisioning/datasources
             - name: dashboards
               mountPath: /etc/grafana/provisioning/dashboards
+            - name: alerting
+              mountPath: /etc/grafana/provisioning/alerting
           resources:
             requests:
               cpu: {{ .Values.grafana.resources.requests.cpu }}
@@ -167,3 +333,6 @@ spec:
         - name: dashboards
           configMap:
             name: grafana-dashboards
+        - name: alerting
+          configMap:
+            name: grafana-alerting
