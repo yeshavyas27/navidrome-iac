@@ -17,7 +17,7 @@ spec:
   templates:
   - name: test-flow
     steps:
-      # Step 1: Integration test - verify /test endpoint returns valid prediction
+      # Step 1: Integration test - verify /recommend endpoint returns a valid response
       - - name: integration-test
           template: check-predict
           arguments:
@@ -27,23 +27,32 @@ spec:
             - name: model-version
               value: "{{workflow.parameters.model-version}}"
 
-      # Step 2: Mark as approved in MLflow if integration test passes
+      # Step 2: Load test - 10 concurrent workers for 30s, assert p95 < 500ms
+      - - name: load-test
+          template: run-load-test
+          arguments:
+            parameters:
+            - name: service-url
+              value: "http://{{workflow.parameters.staging-service}}.{{workflow.parameters.staging-namespace}}.svc.cluster.local:{{workflow.parameters.staging-port}}"
+          when: "'{{steps.integration-test.outputs.parameters.result}}' == 'pass'"
+
+      # Step 3: Mark as approved in MLflow if both tests pass
       - - name: mark-staging-approved
           template: set-staging-approved
           arguments:
             parameters:
             - name: model-version
               value: "{{workflow.parameters.model-version}}"
-          when: "'{{steps.integration-test.outputs.parameters.result}}' == 'pass'"
+          when: "'{{steps.integration-test.outputs.parameters.result}}' == 'pass' && '{{steps.load-test.outputs.parameters.result}}' == 'pass'"
 
-      # Step 3: Branching logic - promote if tests pass
+      # Step 4: Promote to canary if both tests pass
       - - name: promote-on-success
           template: trigger-promote
           arguments:
             parameters:
             - name: model-version
               value: "{{workflow.parameters.model-version}}"
-          when: "'{{steps.integration-test.outputs.parameters.result}}' == 'pass'"
+          when: "'{{steps.integration-test.outputs.parameters.result}}' == 'pass' && '{{steps.load-test.outputs.parameters.result}}' == 'pass'"
 
   # Template: Check /test endpoint (predict with test image)
   - name: check-predict
@@ -61,48 +70,135 @@ spec:
       command: [sh]
       source: |
         #!/bin/sh
-        echo "Testing integration: {{inputs.parameters.service-url}}/test"
+        BASE_URL="{{inputs.parameters.service-url}}"
+        echo "Integration test against: $BASE_URL"
 
-        EXPECTED_VERSION="1.0.{{inputs.parameters.model-version}}"
-
-        # Wait for service to be ready AND serving the expected model version (max 60 seconds)
+        # Step 1: Wait for /health to return ok (max 60s)
         for i in $(seq 1 12); do
-          VERSION_RESP=$(curl -s "{{inputs.parameters.service-url}}/version" 2>/dev/null || true)
-          if echo "$VERSION_RESP" | grep -q "$EXPECTED_VERSION"; then
-            echo "Service is ready with expected version: $EXPECTED_VERSION"
+          HEALTH=$(curl -s "$BASE_URL/health" 2>/dev/null || true)
+          if echo "$HEALTH" | grep -q '"model_loaded":true'; then
+            echo "Service healthy and model loaded."
             break
           fi
-          echo "Waiting for expected version... ($i/12)"
+          echo "Waiting for service... ($i/12): $HEALTH"
           sleep 5
         done
 
-        VERSION_RESP=$(curl -s "{{inputs.parameters.service-url}}/version" 2>/dev/null || true)
-        if ! echo "$VERSION_RESP" | grep -q "$EXPECTED_VERSION"; then
-          echo "✗ Integration test FAILED: /version did not return expected version: $EXPECTED_VERSION"
+        HEALTH=$(curl -s "$BASE_URL/health" 2>/dev/null || true)
+        if ! echo "$HEALTH" | grep -q '"model_loaded":true'; then
+          echo "FAIL: /health did not report model_loaded=true after 60s"
+          echo "Response: $HEALTH"
+          echo "fail" > /tmp/result.txt
+          exit 1
+        fi
+
+        # Step 2: /version must return a loaded_model_key (proves model is pinned/trackable)
+        VERSION_RESP=$(curl -s "$BASE_URL/version" 2>/dev/null || true)
+        echo "Version: $VERSION_RESP"
+        if ! echo "$VERSION_RESP" | grep -q "loaded_model_key"; then
+          echo "FAIL: /version did not return loaded_model_key"
           echo "Response: $VERSION_RESP"
           echo "fail" > /tmp/result.txt
           exit 1
         fi
 
-        # Call /test endpoint (runs inference with hardcoded test image)
-        RESPONSE=$(curl -s "{{inputs.parameters.service-url}}/test")
-        echo "Response: $RESPONSE"
+        # Step 3: /recommend-by-tracks returns recommendations
+        RESPONSE=$(curl -s -X POST "$BASE_URL/recommend-by-tracks" \
+          -H "Content-Type: application/json" \
+          -d '{"session_id":"integration-test","user_id":0,"track_ids":["1","2","3"],"top_n":5}' \
+          2>/dev/null || true)
+        echo "Recommend response: $RESPONSE"
 
-        # Verify response is not empty and is a valid food class name
-        if [ -z "$RESPONSE" ]; then
-          echo "✗ Integration test FAILED: Empty response"
-          echo "fail" > /tmp/result.txt
-          exit 1
-        elif echo "$RESPONSE" | grep -qE "(Bread|Dairy product|Dessert|Egg|Fried food|Meat|Noodles/Pasta|Rice|Seafood|Soup|Vegetable/Fruit)"; then
-          echo "✓ Integration test PASSED: Got valid prediction: $RESPONSE"
+        if echo "$RESPONSE" | grep -q '"recommendations"'; then
+          echo "PASS: integration test passed"
           echo "pass" > /tmp/result.txt
           exit 0
         else
-          echo "✗ Integration test FAILED: Invalid response (not a valid food class)"
-          echo "$RESPONSE"
+          echo "FAIL: /recommend-by-tracks did not return recommendations"
           echo "fail" > /tmp/result.txt
           exit 1
         fi
+
+  # Template: Load test - concurrent /recommend requests, assert p95 < 500ms
+  - name: run-load-test
+    inputs:
+      parameters:
+      - name: service-url
+    outputs:
+      parameters:
+      - name: result
+        valueFrom:
+          path: /tmp/result.txt
+    script:
+      image: python:3.11-slim
+      command: [python]
+      source: |
+        import concurrent.futures, requests, statistics, sys, time
+
+        URL = "{{inputs.parameters.service-url}}/recommend-by-tracks"
+        PAYLOAD = {
+            "session_id": "load-test-staging",
+            "user_id": 0,
+            "track_ids": ["1", "2", "3", "4", "5"],
+            "top_n": 10,
+        }
+        WORKERS = 10
+        DURATION_SEC = 30
+        P95_THRESHOLD_MS = 500
+
+        latencies = []
+        errors = 0
+        deadline = time.time() + DURATION_SEC
+
+        def send():
+            t = time.time()
+            try:
+                r = requests.post(URL, json=PAYLOAD, timeout=5)
+                r.raise_for_status()
+                return (time.time() - t) * 1000
+            except Exception as e:
+                print(f"Request error: {e}")
+                return None
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as ex:
+            futures = []
+            while time.time() < deadline:
+                futures.append(ex.submit(send))
+                time.sleep(0.01)
+            for f in concurrent.futures.as_completed(futures):
+                result = f.result()
+                if result is None:
+                    errors += 1
+                else:
+                    latencies.append(result)
+
+        if not latencies:
+            print("FAIL: No successful requests during load test")
+            open("/tmp/result.txt", "w").write("fail")
+            sys.exit(1)
+
+        p50 = statistics.median(latencies)
+        p95 = statistics.quantiles(latencies, n=100)[94]
+        p99 = statistics.quantiles(latencies, n=100)[98]
+        total = len(latencies) + errors
+        error_rate = errors / total if total else 1.0
+
+        print(f"Load test results: {total} requests, {errors} errors ({error_rate:.1%})")
+        print(f"Latency — p50={p50:.0f}ms  p95={p95:.0f}ms  p99={p99:.0f}ms")
+        print(f"Threshold: p95 < {P95_THRESHOLD_MS}ms")
+
+        if p95 > P95_THRESHOLD_MS:
+            print(f"FAIL: p95 latency {p95:.0f}ms exceeds {P95_THRESHOLD_MS}ms threshold")
+            open("/tmp/result.txt", "w").write("fail")
+            sys.exit(1)
+
+        if error_rate > 0.05:
+            print(f"FAIL: error rate {error_rate:.1%} exceeds 5% threshold")
+            open("/tmp/result.txt", "w").write("fail")
+            sys.exit(1)
+
+        print("PASS: load test within acceptable thresholds")
+        open("/tmp/result.txt", "w").write("pass")
 
   # Template: Set staging-approved alias in MLflow
   - name: set-staging-approved
