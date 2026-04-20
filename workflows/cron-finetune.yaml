@@ -4,7 +4,6 @@ metadata:
   name: cron-finetune
 spec:
   # Runs every day at 11:00 PM UTC
-  # Format: minute hour day-of-month month day-of-week
   schedule: "0 23 * * *"
   timezone: "UTC"
 
@@ -16,265 +15,41 @@ spec:
 
     arguments:
       parameters:
-      # Swift dataset version to pull for fine-tuning data.
-      # Update this to the latest version before applying, e.g. v20260419-finetune-001
       - name: finetune-data-version
         value: "v20260419-finetune-001"
-
-    podMetadata:
-      annotations:
-        seccomp.security.alpha.kubernetes.io/pod: unconfined
-        container.apparmor.security.beta.kubernetes.io/main: unconfined
-
-    volumeClaimTemplates:
-    - metadata:
-        name: workdir
-      spec:
-        accessModes: [ "ReadWriteOnce" ]
-        resources:
-          requests:
-            storage: 10Gi
-
-    volumes: []
+      - name: mi100-host
+        value: "129.114.108.202"
 
     templates:
     - name: finetune-pipeline
       steps:
-      # Step 1: Clone the repo so buildkit has the full train/ context
-      - - name: clone-repo
-          template: git-clone
-      # Step 2: Build train/docker_amd/Dockerfile and push to cluster registry
-      - - name: build-amd-image
-          template: buildkit-rootless
-      # Step 3: Find the latest model.pt + vocab.pkl keys in MinIO
-      - - name: discover-latest-model
-          template: discover-model
-      # Step 4: Run fine-tuning inside the freshly built AMD image
-      - - name: run-finetune
-          template: finetune
-          arguments:
-            parameters:
-            - name: pretrain-model-key
-              value: "{{steps.discover-latest-model.outputs.parameters.model-key}}"
-            - name: pretrain-vocab-key
-              value: "{{steps.discover-latest-model.outputs.parameters.vocab-key}}"
+      - - name: ssh-finetune
+          template: ssh-and-run
 
-    # ----------------------------------------------------------------
-    # git-clone: shallow-clone navidrome_mlops onto the shared volume
-    # ----------------------------------------------------------------
-    - name: git-clone
-      retryStrategy:
-        limit: "5"
-        retryPolicy: "Always"
-        backoff:
-          duration: "10s"
-          factor: "2"
+    - name: ssh-and-run
       container:
-        image: alpine/git:v2.26.2
-        workingDir: /mnt/workspace
-        env:
-        - name: GIT_TERMINAL_PROMPT
-          value: "0"
-        command: [git]
-        args:
-          - clone
-          - --depth
-          - "1"
-          - --filter=blob:none
-          - --no-tags
-          - --single-branch
-          - --branch
-          - navidrome-custom
-          - https://github.com/yeshavyas27/navidrome_mlops.git
-          - .
-        volumeMounts:
-        - name: workdir
-          mountPath: /mnt/workspace
-
-    # ----------------------------------------------------------------
-    # buildkit-rootless: builds train/docker_amd/Dockerfile
-    # Context : /mnt/workspace/train   (what COPY . . sees)
-    # Dockerfile: /mnt/workspace/train/docker_amd/Dockerfile
-    # Pushes to: registry.kube-system.svc.cluster.local:5000/navidrome-train-amd:latest
-    # ----------------------------------------------------------------
-    - name: buildkit-rootless
-      retryStrategy:
-        limit: "3"
-        retryPolicy: "Always"
-        backoff:
-          duration: "30s"
-          factor: "2"
-      container:
-        image: moby/buildkit:rootless
-        env:
-        - name: BUILDKITD_FLAGS
-          value: --oci-worker-no-process-sandbox
-        command: [buildctl-daemonless.sh]
-        args:
-          - build
-          - --frontend
-          - dockerfile.v0
-          - --local
-          - context=/mnt/workspace/train
-          - --local
-          - dockerfile=/mnt/workspace/train/docker_amd
-          - --output
-          - type=image,name=registry.kube-system.svc.cluster.local:5000/navidrome-train-amd:latest,push=true,registry.insecure=true
-          - --export-cache
-          - type=registry,ref=registry.kube-system.svc.cluster.local:5000/navidrome-train-amd:buildcache,mode=max,registry.insecure=true
-          - --import-cache
-          - type=registry,ref=registry.kube-system.svc.cluster.local:5000/navidrome-train-amd:buildcache,registry.insecure=true
-        resources:
-          requests:
-            memory: "2Gi"
-            cpu: "500m"
-          limits:
-            memory: "4Gi"
-            cpu: "1"
-        securityContext:
-          runAsUser: 1000
-          runAsGroup: 1000
-          seccompProfile:
-            type: Unconfined
-          appArmorProfile:
-            type: Unconfined
-        volumeMounts:
-        - name: workdir
-          mountPath: /mnt/workspace
-        - name: workdir
-          mountPath: /home/user/.local/share/buildkit
-          subPath: .buildkit-cache
-
-    # ----------------------------------------------------------------
-    # discover-model: finds the most recently uploaded model.pt in
-    # MinIO under finetune/ (falls back to pretrain/ if none exist).
-    # Derives the vocab.pkl key from the same prefix.
-    # ----------------------------------------------------------------
-    - name: discover-model
-      outputs:
-        parameters:
-        - name: model-key
-          valueFrom:
-            path: /var/run/argo/outputs/parameters/model-key
-        - name: vocab-key
-          valueFrom:
-            path: /var/run/argo/outputs/parameters/vocab-key
-      retryStrategy:
-        limit: "3"
-        retryPolicy: "Always"
-        backoff:
-          duration: "10s"
-          factor: "2"
-      container:
-        image: python:3.11-slim
+        image: alpine:3.19
         command: [sh, -c]
         args:
           - |
             set -eu
-            pip install boto3 --quiet --disable-pip-version-check
+            apk add --no-cache openssh-client
 
-            python3 - <<'PYEOF'
-            import os, sys, boto3
+            mkdir -p ~/.ssh
+            cp /secret/id_rsa ~/.ssh/id_rsa
+            chmod 600 ~/.ssh/id_rsa
+            ssh-keyscan -H "{{workflow.parameters.mi100-host}}" >> ~/.ssh/known_hosts 2>/dev/null
 
-            url    = os.environ["MINIO_URL"]
-            user   = os.environ["MINIO_USER"]
-            pwd    = os.environ["MINIO_PASSWORD"]
-            bucket = os.environ.get("MINIO_BUCKET", "artifacts")
+            ssh -i ~/.ssh/id_rsa \
+              -o StrictHostKeyChecking=no \
+              cc@{{workflow.parameters.mi100-host}} \
+              "cd /home/cc/navidrome_mlops && git pull origin navidrome-custom && bash train/run_finetune.sh '{{workflow.parameters.finetune-data-version}}'"
+        volumeMounts:
+        - name: ssh-key
+          mountPath: /secret
+          readOnly: true
 
-            s3 = boto3.client(
-                "s3",
-                endpoint_url=url,
-                aws_access_key_id=user,
-                aws_secret_access_key=pwd,
-                region_name="us-east-1",
-            )
-
-            def latest_model_in(prefix):
-                paginator = s3.get_paginator("list_objects_v2")
-                best_key, best_ts = None, None
-                for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
-                    for obj in page.get("Contents", []):
-                        if obj["Key"].endswith("/model.pt"):
-                            if best_ts is None or obj["LastModified"] > best_ts:
-                                best_key = obj["Key"]
-                                best_ts  = obj["LastModified"]
-                return best_key
-
-            # Prefer the latest finetune checkpoint; fall back to pretrain
-            model_key = latest_model_in("finetune/") or latest_model_in("pretrain/")
-            if not model_key:
-                print("ERROR: no model.pt found in MinIO bucket", file=sys.stderr)
-                sys.exit(1)
-
-            vocab_key = model_key.rsplit("/model.pt", 1)[0] + "/vocab.pkl"
-
-            os.makedirs("/var/run/argo/outputs/parameters", exist_ok=True)
-            with open("/var/run/argo/outputs/parameters/model-key", "w") as f:
-                f.write(model_key)
-            with open("/var/run/argo/outputs/parameters/vocab-key", "w") as f:
-                f.write(vocab_key)
-
-            print(f"model-key : {model_key}")
-            print(f"vocab-key : {vocab_key}")
-            PYEOF
-        env:
-        - name: MINIO_URL
-          value: "http://129.114.27.204:9000"
-        - name: MINIO_BUCKET
-          value: "artifacts"
-        - name: MINIO_USER
-          valueFrom:
-            secretKeyRef:
-              name: minio-credentials
-              key: accesskey
-        - name: MINIO_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: minio-credentials
-              key: secretkey
-
-    # ----------------------------------------------------------------
-    # finetune: runs finetune_gru4rec.py inside the freshly built AMD image
-    # ----------------------------------------------------------------
-    - name: finetune
-      inputs:
-        parameters:
-        - name: pretrain-model-key
-        - name: pretrain-vocab-key
-      container:
-        image: registry.kube-system.svc.cluster.local:5000/navidrome-train-amd:latest
-        workingDir: /home/appuser/work
-        command: [python3, finetune_gru4rec.py]
-        args:
-          - --pretrain-model-key
-          - "{{inputs.parameters.pretrain-model-key}}"
-          - --pretrain-vocab-key
-          - "{{inputs.parameters.pretrain-vocab-key}}"
-          - --finetune-data-version
-          - "{{workflow.parameters.finetune-data-version}}"
-        env:
-        - name: MLFLOW_TRACKING_URI
-          value: "http://129.114.27.204:8000"
-        - name: MINIO_URL
-          value: "http://129.114.27.204:9000"
-        - name: MINIO_BUCKET
-          value: "artifacts"
-        - name: MINIO_USER
-          valueFrom:
-            secretKeyRef:
-              name: minio-credentials
-              key: accesskey
-        - name: MINIO_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: minio-credentials
-              key: secretkey
-        resources:
-          requests:
-            memory: "8Gi"
-            cpu: "2"
-            amd.com/gpu: "1"
-          limits:
-            memory: "16Gi"
-            cpu: "4"
-            amd.com/gpu: "1"
+      volumes:
+      - name: ssh-key
+        secret:
+          secretName: chameleon-ssh-key
