@@ -42,13 +42,29 @@ spec:
               name: http
           env:
             - name: MLFLOW_TRACKING_URI
-              value: "http://mlflow.navidrome-platform.svc.cluster.local:8000"
+              value: ""
             - name: VOCAB_PATH
               value: "/app/artifacts/vocabs.pkl"
             - name: MODEL_PATH
               value: "/app/artifacts/best_gru4rec.pt"
             - name: DEVICE
               value: "cpu"
+            - name: MINIO_URL
+              value: "http://minio.navidrome-platform.svc.cluster.local:9000"
+            - name: MINIO_USER
+              value: "minioadmin"
+            - name: MINIO_PASSWORD
+              value: "navidrome2026"
+            - name: MINIO_BUCKET
+              value: "artifacts"
+            - name: MINIO_POPULARITY_KEY
+              value: "popularity.npy"
+            - name: TRACK_META_BUCKET
+              value: "navidrome-metadata"
+            - name: TRACK_META_KEY
+              value: "track_dict.parquet"
+            - name: AUDIO_BUCKET
+              value: "audio-cache"
           volumeMounts:
             - name: artifacts
               mountPath: /app/artifacts
