@@ -221,6 +221,12 @@ kubectl create secret generic minio-credentials \
   --from-literal=accesskey=minioadmin \
   --from-literal=secretkey=<minio-password>
 
+# Chameleon SSH key (needed for Argo to SSH into the MI100 training server)
+# Step 1: copy key from local machine to cluster node
+scp -i ~/.ssh/id_rsa_chameleon ~/.ssh/id_rsa_chameleon cc@<FLOATING_IP>:/home/cc/id_rsa_chameleon
+# Step 2: on the cluster node, create the secret
+kubectl create secret generic chameleon-ssh-key --from-file=id_rsa=/home/cc/id_rsa_chameleon -n argo
+
 # Verify
 kubectl get secrets -n navidrome-platform
 ```
