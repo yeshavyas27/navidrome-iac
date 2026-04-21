@@ -63,6 +63,81 @@ data:
         ]
       }
     }
+  navidrome-serving.json: |
+    {
+      "dashboard": {
+        "title": "Navidrome Serving — SLIs & Safeguards",
+        "description": "Live behavior of the GRU4Rec serving container + training-side safeguard metrics pushed from finetune_gru4rec.py. Alert thresholds in this dashboard match the rules in prometheus-rules.yaml and the policy in navidrome-recommendations/TRIGGERS.md.",
+        "tags": ["navidrome", "serving", "ml"],
+        "timezone": "browser",
+        "panels": [
+          {
+            "title": "Request rate by status (req/s)",
+            "targets": [
+              { "expr": "sum by (status) (rate(recommend_requests_total[1m]))" }
+            ]
+          },
+          {
+            "title": "Latency percentiles (seconds)",
+            "description": "p50 / p95 / p99 of recommend_latency_seconds. SLO: p95 < 250ms. Rollback alert at p95 > 1s for 5m.",
+            "targets": [
+              { "expr": "histogram_quantile(0.50, rate(recommend_latency_seconds_bucket[1m]))", "legendFormat": "p50" },
+              { "expr": "histogram_quantile(0.95, rate(recommend_latency_seconds_bucket[1m]))", "legendFormat": "p95" },
+              { "expr": "histogram_quantile(0.99, rate(recommend_latency_seconds_bucket[1m]))", "legendFormat": "p99" }
+            ]
+          },
+          {
+            "title": "Cold-start activation rate",
+            "description": "Fraction of requests served from popularity fallback. Expected ~10% steady-state; ColdStartSurge alert fires at > 30% for 10m.",
+            "targets": [
+              { "expr": "rate(recommend_cold_start_activations_total[5m]) / rate(recommend_requests_total[5m])", "legendFormat": "cold-start fraction" }
+            ]
+          },
+          {
+            "title": "OOV items per request (avg)",
+            "description": "OOVRateHigh alert fires at > 5 for 10m. Signal that incoming track_ids don't match model vocab (pipeline drift).",
+            "targets": [
+              { "expr": "rate(recommend_oov_items_total[5m]) / rate(recommend_requests_total[5m])", "legendFormat": "oov/request" }
+            ]
+          },
+          {
+            "title": "/play cache hit rate",
+            "description": "Hit rate of audio cache. PlayCacheHitRateLow alert fires at < 30% for 30m.",
+            "targets": [
+              { "expr": "rate(play_cache_hits_total[5m]) / (rate(play_cache_hits_total[5m]) + rate(play_cache_misses_total[5m]))", "legendFormat": "hit rate" }
+            ]
+          },
+          {
+            "title": "Currently-deployed model",
+            "description": "Gauge labels expose model_version + num_items + embedding_dim. Lets you correlate metric dips to specific model versions during post-mortem.",
+            "targets": [
+              { "expr": "recommend_model_info" }
+            ]
+          },
+          {
+            "title": "Finetune safeguard: HR@10 delta vs previous best",
+            "description": "Pushed from train/finetune_gru4rec.py after each run. FinetuneRegression alert fires if this drops below -0.05 (5pp regression).",
+            "targets": [
+              { "expr": "gru4rec_safeguard_hr_delta" }
+            ]
+          },
+          {
+            "title": "Finetune safeguard: training-data popularity concentration",
+            "description": "Fraction of training interactions in the top-10% most-popular items. Feedback-loop drift detector — PopularityConcentrationHigh alert at > 0.7 for 10m.",
+            "targets": [
+              { "expr": "gru4rec_safeguard_popularity_share", "legendFormat": "top-10% share" }
+            ]
+          },
+          {
+            "title": "Finetune safeguard: data-quality gate",
+            "description": "1 = passed, 0 = failed. Fires FinetuneDataQualityFailed alert on 0.",
+            "targets": [
+              { "expr": "gru4rec_safeguard_data_quality_passed", "legendFormat": "dq pass" }
+            ]
+          }
+        ]
+      }
+    }
 ---
 # Grafana Unified Alerting provisioning:
 #   - rules.yaml → ML serving alert rules (PromQL), visible on dashboard only
