@@ -146,7 +146,7 @@ data:
               description: "Audio cache may have been wiped or warmup didn't populate. Doesn't trigger model rollback; fixes the cache."
 
           - alert: NavidromeServeDown
-            expr: up{job=~".*navidrome-serve.*"} == 0
+            expr: up{app="navidrome-serve"} == 0
             for: 2m
             labels:
               severity: critical
@@ -154,3 +154,40 @@ data:
             annotations:
               summary: "navidrome-serve /metrics endpoint unreachable"
               description: "Pod crashed, unschedulable, or Prometheus scrape config broken."
+
+      # Training-side safeguard signals, pushed to Prometheus pushgateway
+      # by train/finetune_gru4rec.py after each run. See that file's
+      # push_safeguard_metrics_to_prometheus() for how the gauges are emitted.
+      - name: training.rules
+        interval: {{ .Values.prometheus.evaluationInterval }}
+        rules:
+          - alert: FinetuneRegression
+            expr: gru4rec_safeguard_hr_delta < -0.05
+            for: 0m
+            labels:
+              severity: warning
+              service: training
+              action: review
+            annotations:
+              summary: "Last finetune dropped HR@10 > 5pp vs previous best"
+              description: "Review the latest MLflow finetune run; candidate for rollback to prior model key. mlflow_run_id and data_version are included as alert labels."
+
+          - alert: FinetuneDataQualityFailed
+            expr: gru4rec_safeguard_data_quality_passed == 0
+            for: 0m
+            labels:
+              severity: warning
+              service: training
+            annotations:
+              summary: "Finetune run flagged data-quality issues"
+              description: "Finetune failed session-length or item-frequency checks. Possible data poisoning or distribution drift. See alert labels for data_version and mlflow_run_id."
+
+          - alert: PopularityConcentrationHigh
+            expr: gru4rec_safeguard_popularity_share > 0.7
+            for: 10m
+            labels:
+              severity: warning
+              service: training
+            annotations:
+              summary: "> 70% of training interactions in top-10% items"
+              description: "Feedback-loop drift: recs -> plays -> retrain on plays -> more of same. Investigate recommendation diversity."
