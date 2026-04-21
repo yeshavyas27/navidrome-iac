@@ -134,7 +134,7 @@ spec:
             ssh -i ~/.ssh/id_rsa \
               -o StrictHostKeyChecking=no \
               cc@{{workflow.parameters.mi100-host}} \
-              "cd /home/cc/navidrome_mlops && git pull origin navidrome-custom && bash train/run_finetune.sh '{{workflow.parameters.finetune-data-version}}'"
+              "cd /home/cc/navidrome_mlops && git fetch origin navidrome-custom && git reset --hard origin/navidrome-custom && bash train/run_finetune.sh '{{workflow.parameters.finetune-data-version}}'"
         volumeMounts:
         - name: ssh-key
           mountPath: /secret
