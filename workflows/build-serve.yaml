@@ -48,7 +48,7 @@ spec:
         - --depth
         - "1"
         - --single-branch
-        - https://github.com/vanshika2022/navidrome-recommendations.git
+        - https://github.com/yeshavyas27/navidrome-recommendations.git
         - .
       volumeMounts:
       - name: workdir

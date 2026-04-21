@@ -78,3 +78,79 @@ data:
             for: 10m
             annotations:
               summary: "GPU utilization above 95 percent for 10 minutes"
+
+      # Serving-layer SLO + rollback-trigger rules. Justified in
+      # navidrome-recommendations/TRIGGERS.md. Metrics come from
+      # navidrome-serve /metrics endpoint (Prometheus client in app.py).
+      - name: serving.rules
+        interval: {{ .Values.prometheus.evaluationInterval }}
+        rules:
+          # ─── hard rollback: fire, review, execute scripts/rollback.sh ──
+          - alert: ServingErrorRateCritical
+            expr: rate(recommend_requests_total{status="500"}[5m]) > 0.05
+            for: 5m
+            labels:
+              severity: critical
+              service: navidrome-serve
+              action: rollback
+            annotations:
+              summary: "navidrome-serve 500-rate > 5% for 5m"
+              description: "Error rate past UX-breaking threshold. Review pod logs, then consider rolling back via scripts/rollback.sh."
+
+          - alert: ServingLatencyP95Critical
+            expr: histogram_quantile(0.95, rate(recommend_latency_seconds_bucket[5m])) > 1.0
+            for: 5m
+            labels:
+              severity: critical
+              service: navidrome-serve
+              action: rollback
+            annotations:
+              summary: "navidrome-serve p95 latency > 1s for 5m"
+              description: "Latency past 4x SLO. Likely a bad model or runaway inference. Candidate for rollback."
+
+          # ─── soft rollback: investigate before rolling back ──
+          - alert: ColdStartSurge
+            expr: |
+              rate(recommend_cold_start_activations_total[10m])
+                / rate(recommend_requests_total[10m]) > 0.30
+            for: 10m
+            labels:
+              severity: warning
+              service: navidrome-serve
+            annotations:
+              summary: "Cold-start fallback firing on > 30% of requests"
+              description: "Model vocab may have drifted from the library. Check track-id mapping pipeline; rollback if confirmed."
+
+          - alert: OOVRateHigh
+            expr: |
+              rate(recommend_oov_items_total[10m])
+                / rate(recommend_requests_total[10m]) > 5
+            for: 10m
+            labels:
+              severity: warning
+              service: navidrome-serve
+            annotations:
+              summary: "OOV items per request > 5 for 10m"
+              description: "Request pipeline may be sending UUIDs instead of 30Music track_ids. Check Go handler + enrichment ingest."
+
+          - alert: PlayCacheHitRateLow
+            expr: |
+              rate(play_cache_hits_total[30m])
+                / (rate(play_cache_hits_total[30m]) + rate(play_cache_misses_total[30m])) < 0.3
+            for: 30m
+            labels:
+              severity: warning
+              service: navidrome-serve
+            annotations:
+              summary: "/play cache hit rate < 30% for 30m"
+              description: "Audio cache may have been wiped or warmup didn't populate. Doesn't trigger model rollback; fixes the cache."
+
+          - alert: NavidromeServeDown
+            expr: up{job=~".*navidrome-serve.*"} == 0
+            for: 2m
+            labels:
+              severity: critical
+              service: navidrome-serve
+            annotations:
+              summary: "navidrome-serve /metrics endpoint unreachable"
+              description: "Pod crashed, unschedulable, or Prometheus scrape config broken."
