@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: navidrome-serve-staging
+  namespace: navidrome-staging
+  labels:
+    app: navidrome-serve-staging
+    environment: staging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: navidrome-serve-staging
+  template:
+    metadata:
+      labels:
+        app: navidrome-serve-staging
+        environment: staging
+    spec:
+      containers:
+        - name: serve
+          image: registry.kube-system.svc.cluster.local:5000/navidrome-serve:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          env:
+            - name: VOCAB_PATH
+              value: "/app/artifacts/vocabs.pkl"
+            - name: MODEL_PATH
+              value: "/app/artifacts/best_gru4rec.pt"
+            - name: DEVICE
+              value: "cpu"
+            - name: MODEL_VERSION
+              value: "staging"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: navidrome-serve-staging
+  namespace: navidrome-staging
+spec:
+  selector:
+    app: navidrome-serve-staging
+  ports:
+    - port: 8080
+      targetPort: 8080
