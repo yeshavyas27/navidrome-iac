@@ -76,6 +76,21 @@ alertmanager:
     size: 2Gi
     storageClass: local-path
 
+# Pushgateway Configuration
+pushgateway:
+  image: prom/pushgateway:v1.9.0
+  replicas: 1
+  port: 9091
+  nodePort: 30091
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
 # NVIDIA GPU Plugin (optional)
 nvidia_gpu_plugin:
   enabled: false
